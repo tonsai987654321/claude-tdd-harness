@@ -3,5 +3,6 @@
   "version": "0.1.0",
   "description": "A mechanical RED gate for test-driven development: a PreToolUse hook blocks every write to production code until a test has been run and watched to fail. Ships the gate, cycle tracking, evidence-gated completion, TDD subagents, and a scaffolder that installs the whole thing into a fresh repo.",
   "author": { "name": "tonsai" },
+  "repository": "https://github.com/tonsai987654321/claude-tdd-harness",
   "keywords": ["tdd", "testing", "red-green-refactor", "quality-gate", "pytest", "vitest"]
 }

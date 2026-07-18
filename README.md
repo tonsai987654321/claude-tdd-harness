@@ -19,13 +19,26 @@ The rule it enforces is one line — *no production code without a failing test 
 
 The installed repo is **self-contained**. Scripts are copied in, not referenced from the plugin, so the gate keeps working in a fresh clone on a machine that has never heard of this plugin — which is the situation any reviewer of the repo is in.
 
-## Install
+## Install the plugin
+
+```
+/plugin marketplace add tonsai987654321/claude-tdd-harness
+/plugin install tdd-harness@tonsai-plugins
+```
+
+The repo is both the marketplace and the plugin, so one `marketplace add` is enough. `tonsai-plugins` is the marketplace name from `.claude-plugin/marketplace.json`, not the repo name.
+
+The repo is private, so the install uses your existing git credentials — `gh auth login` over HTTPS, or SSH via `ssh-agent`. Background auto-updates disable credential helpers by default; if that bites, set `CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE=1` so a failed pull keeps the last synced state instead of dropping the marketplace.
+
+## Use it
+
+In the repo you want the harness installed into:
 
 ```
 /harness-init
 ```
 
-It will ask for the owner, the projects, and each project's runner and coverage gate, then scaffold and verify. Or drive it directly:
+It asks for the owner, the projects, and each project's runner and coverage gate, then scaffolds and verifies. Or drive the scaffolder directly, without the plugin:
 
 ```bash
 python3 scripts/harness_init.py --target /path/to/repo --owner alice \
