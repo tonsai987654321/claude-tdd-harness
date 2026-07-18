@@ -117,6 +117,21 @@ uv run --with pytest python -m pytest tests/ -q
 
 The suite drives `harness.py` itself — the gate's block/allow decisions, the handoff's refusal to declare done over its own blockers, UTF-8 pinning on every read and write, and the config layer's guarantee that the defaults still compile to the patterns the hardcoded constants used to hold.
 
+## Releasing
+
+Claude Code caches an installed plugin under the **version declared in `plugin.json`**, not under the commit. Pushing a fix without moving the version ships it to nobody — `marketplace update` reports success and re-fetches nothing.
+
+So for any change to behaviour:
+
+1. Bump `version` in **both** `.claude-plugin/plugin.json` and the entry in `.claude-plugin/marketplace.json`. `claude plugin validate .` fails if they disagree.
+2. Commit and push.
+3. `claude plugin tag .` — creates `tdd-harness--v<version>`, revalidating that the manifests agree. Push it with `git push origin --tags`.
+4. **Verify the installed copy, not the repo.** Run `claude plugin update tdd-harness@tonsai-plugins`, then grep `~/.claude/plugins/cache/tonsai-plugins/tdd-harness/<version>/` for a string that exists only in the new build. If it is not there, it did not ship.
+
+Docs-only changes do not need a bump — they never reach a running session either way.
+
+Step 4 is not paranoia. It is what caught three fixes that had been pushed, reported green, and reached nobody. See [docs/LESSONS.md](docs/LESSONS.md).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
