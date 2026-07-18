@@ -1,0 +1,242 @@
+#!/bin/bash
+# The single command that answers: is this repo healthy, and is the harness still enforcing anything?
+# Run it before editing, and again before claiming anything is done.
+#
+# Nothing about which projects exist or which paths are guarded is written here — it is all
+# derived from .claude/harness.json at runtime, so widening the guarded set widens this check too.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+# The gate is handed file paths by Claude Code, which are native (`D:\...` on Windows).
+# Under Git Bash `$PWD` is `/d/...`, which Windows Python resolves to a nonexistent
+# `D:\d\...`: the gate finds no harness root and exits 0 — it fails OPEN, and the
+# self-test below reads a healthy gate as a broken one. `pwd -W` prints the native path
+# there. Test its OUTPUT, never its exit status: Linux bash accepts `-W`, prints nothing,
+# and still exits 0, so keying off `||` would leave ROOT empty and fail open on POSIX.
+ROOT="$(pwd -W 2>/dev/null)" || true
+[ -n "$ROOT" ] || ROOT="$PWD"
+export CLAUDE_PROJECT_DIR="$ROOT"
+H=".claude/scripts/harness.py"
+
+echo "=== Environment ==="
+
+need() {
+  command -v "$1" >/dev/null 2>&1 || { echo "MISSING: $1 — $2"; exit 1; }
+  echo "  ok   $1"
+}
+
+hint_for() {
+  case "$1" in
+    python3) echo "install Python 3.12+" ;;
+    uv)      echo "https://docs.astral.sh/uv/ (brew install uv)" ;;
+    docker)  echo "install Docker Desktop" ;;
+    gh)      echo "brew install gh" ;;
+    node|npm) echo "install Node 20+" ;;
+    *)       echo "required by .claude/harness.json" ;;
+  esac
+}
+
+# Which tools this repo actually needs. A harness with no containerised tests should not
+# fail because Docker is not running.
+for tool in $(python3 -c '
+import json, pathlib
+cfg = {}
+p = pathlib.Path(".claude/harness.json")
+if p.is_file():
+    try: cfg = json.loads(p.read_text(encoding="utf-8"))
+    except Exception: pass
+print(" ".join(cfg.get("requires", ["python3", "uv"])))
+'); do
+  need "$tool" "$(hint_for "$tool")"
+done
+
+if command -v docker >/dev/null 2>&1 && python3 -c '
+import json,pathlib,sys
+p=pathlib.Path(".claude/harness.json")
+cfg=json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+sys.exit(0 if "docker" in cfg.get("requires",[]) else 1)'; then
+  docker info >/dev/null 2>&1 || {
+    echo "FAIL: the Docker daemon is not running."
+    echo "      Integration tests use testcontainers and will fail at the first fixture."
+    exit 1
+  }
+  echo "  ok   docker daemon"
+fi
+
+if python3 -c '
+import json,pathlib,sys
+p=pathlib.Path(".claude/harness.json")
+cfg=json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+sys.exit(0 if "gh" in cfg.get("requires",[]) else 1)'; then
+  gh auth status >/dev/null 2>&1 || { echo "FAIL: gh is not authenticated. Run: gh auth login"; exit 1; }
+  echo "  ok   gh authenticated"
+fi
+
+echo
+echo "=== Harness self-test ==="
+# A gate that has quietly stopped blocking is the worst possible failure: everything
+# looks green while the discipline it exists to enforce is gone. Prove it still bites.
+#
+# Probe a synthetic project, never a real one. A real project's gate is legitimately OPEN
+# in the middle of a RED cycle, and this check must not read honest work as a broken gate.
+
+probe() { echo "{\"tool_input\":{\"file_path\":\"$ROOT/$1\"}}" | python3 "$H" gate >/dev/null 2>&1; echo $?; }
+
+# Every guarded path must block, and a representative unguarded one must not. Both lists are
+# generated from the config, so a repo that guards `lib/` gets `lib/` probed without editing this.
+while IFS='|' read -r path want label; do
+  [ -n "$path" ] || continue
+  got=$(probe "$path")
+  if [ "$got" != "$want" ]; then
+    echo "FAIL: gate returned $got, wanted $want — $label ($path)"
+    exit 1
+  fi
+  echo "  ok   $label"
+done <<EOF
+$(python3 - <<'PY'
+import json, pathlib
+
+cfg = {}
+p = pathlib.Path(".claude/harness.json")
+if p.is_file():
+    try:
+        cfg = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+
+pdir = cfg.get("projects_dir", "projects")
+guarded = cfg.get("guarded", ["app/", "src/", "alembic/versions/", "alembic/env.py"])
+base = f"{pdir}/__gatecheck__"
+
+# A file that should be refused, per guarded entry. A directory entry gets a plausible source
+# file under it; an exact filename is probed as itself.
+SAMPLE = {"app/": "probe.py", "src/": "probe.ts", "alembic/versions/": "0001_x.py"}
+rows = []
+for entry in guarded:
+    if entry.endswith("/"):
+        rows.append((f"{base}/{entry}{SAMPLE.get(entry, 'probe.py')}", 2, f"gate blocks {entry} while SHUT"))
+    else:
+        rows.append((f"{base}/{entry}", 2, f"gate blocks {entry}"))
+
+# Things that must stay writable. Tests are the point of the exercise; config no test can
+# drive must never be held hostage to a RED cycle.
+rows += [
+    (f"{base}/tests/test_probe.py", 0, "gate allows tests/"),
+    (f"{base}/README.md", 0, "gate allows docs"),
+]
+if "alembic/env.py" in guarded:
+    rows.append((f"{base}/alembic.ini", 0, "gate allows alembic config"))
+if "src/" in guarded:
+    rows.append((f"{base}/src/probe.test.ts", 0, "gate allows frontend tests under src/"))
+
+# A worktree sits inside the harness root, so its project paths do not start at the projects
+# dir. An anchored guard silently matches nothing there and the gate stops guarding entirely.
+first_dir = next((g for g in guarded if g.endswith("/")), None)
+if first_dir:
+    sample = SAMPLE.get(first_dir, "probe.py")
+    rows.append((f".claude/worktrees/__probe__/{base}/{first_dir}{sample}", 2,
+                 f"gate blocks {first_dir} inside a worktree"))
+
+for path, want, label in rows:
+    print(f"{path}|{want}|{label}")
+PY
+)
+EOF
+
+python3 "$H" status >/dev/null
+echo "  ok   dashboard renders"
+
+# The suite under tests/ drives harness.py itself. It is pinned to 3.12 because it relies on
+# EncodingWarning (3.10+) to prove the harness never falls back to the machine's locale codec --
+# on an older interpreter the guard is ignored and every test would pass against broken code.
+if [ -d "$ROOT/tests" ]; then
+  if uv run --no-project --python 3.12 --with pytest pytest "$ROOT/tests" -q >/dev/null 2>&1; then
+    echo "  ok   harness suite passes"
+  else
+    echo "FAIL: the harness's own test suite is red. Run:"
+    echo "      uv run --no-project --python 3.12 --with pytest pytest tests -q"
+    exit 1
+  fi
+fi
+
+echo
+echo "=== Unproven completions ==="
+python3 - <<'PY'
+import json, pathlib, sys
+bad = []
+for f in sorted(pathlib.Path(".claude/state").glob("*.json")) if pathlib.Path(".claude/state").is_dir() else []:
+    s = json.loads(f.read_text(encoding="utf-8"))
+    bad += [
+        f"{s['project']} cycle {c['id']}"
+        for c in s["cycles"]
+        if c["state"] == "done" and not c.get("evidence")
+    ]
+if bad:
+    print("  FAIL: marked done with no evidence: " + ", ".join(bad))
+    print("        Re-verify and record evidence, or reopen the cycle.")
+    sys.exit(1)
+print("  ok   every done cycle carries evidence")
+PY
+
+echo
+echo "=== Project suites ==="
+# Only projects that have been scaffolded. An unscaffolded project is not a failure.
+PROJECTS_DIR="$(python3 -c '
+import json, pathlib
+p = pathlib.Path(".claude/harness.json")
+cfg = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+print(cfg.get("projects_dir", "projects"))
+')"
+shopt -s nullglob
+found=0
+for d in "$PROJECTS_DIR"/*/; do
+  found=1
+  p=$(basename "$d")
+  if [ -f "$d/pyproject.toml" ]; then
+    echo "--- $p"
+    (
+      cd "$d"
+      uv run ruff check . && uv run ruff format --check .
+
+      # A freshly scaffolded project has no app/ yet: the first module there must be
+      # demanded by a failing test, not by the linter.
+      if [ -d app ] && [ -n "$(find app -name '*.py' -not -name '__init__.py' -print -quit)" ]; then
+        uv run mypy --strict app/
+      else
+        echo "  skip mypy (no app/ modules yet)"
+      fi
+
+      # pytest exit 5 == "no tests collected". Before the first cycle that is the correct
+      # state, not a failure. Any other non-zero exit is a real one.
+      uv run pytest --cov -q || [ $? -eq 5 ]
+    )
+  elif [ -f "$d/package.json" ]; then
+    # A frontend is a project like any other, and it has a mechanical gate of its own.
+    # Gating this loop on pyproject.toml alone quietly reports it "not scaffolded" and never
+    # runs a single test — a whole suite can rot green-looking, unwatched.
+    echo "--- $p"
+    (
+      cd "$d"
+      # npm ci, not npm install: install rewrites package-lock.json, which silently drifts the
+      # verified dependency set away from the one CI pins.
+      [ -d node_modules ] || npm ci --silent
+      npm run typecheck
+      npm run lint
+      npm run coverage
+    )
+  else
+    echo "  skip $p (not scaffolded yet)"
+  fi
+done
+[ "$found" = "1" ] || echo "  no projects cloned into $PROJECTS_DIR/ yet"
+shopt -u nullglob
+
+echo
+echo "=== Verification complete ==="
+echo
+echo "Next steps:"
+echo "1. Read PROGRESS.md for the board, or run: python3 $H status"
+echo "2. Take the next action in HANDOFF.md, or run: python3 $H handoff"
+echo "3. Work ONE cycle. Never skip: later tests depend on earlier code."
+echo "4. No production code without a failing test. The gate enforces this; do not bypass it."
+echo "5. A cycle is done only with evidence: what ran, what it printed, the two commit SHAs."

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd fallback that resumes the build after a usage-limit reset, even if
+  the Claude session was hard-killed. Ticks every 30 minutes; auto_resume.sh
+  no-ops when work is done, a resume is already running, or quota is still out.
+
+  Enable (once):
+    cp .claude/scripts/auto_resume.plist ~/Library/LaunchAgents/com.pea.autoresume.plist
+    launchctl load ~/Library/LaunchAgents/com.pea.autoresume.plist
+  Disable:
+    launchctl unload ~/Library/LaunchAgents/com.pea.autoresume.plist
+  Watch:
+    tail -f .claude/state/auto_resume.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.pea.autoresume</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/ton/Desktop/git_collection/electric-portfolio/.claude/worktrees/harness-bootstrap/.claude/scripts/auto_resume.sh</string>
+    </array>
+
+    <!-- Every 30 minutes. The script itself is the real guard: it exits fast
+         when there is nothing to do or quota is still out, so a frequent tick
+         is cheap and means resume lands within ~30 min of the window reopening. -->
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/ton/Desktop/git_collection/electric-portfolio/.claude/worktrees/harness-bootstrap/.claude/state/auto_resume.launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ton/Desktop/git_collection/electric-portfolio/.claude/worktrees/harness-bootstrap/.claude/state/auto_resume.launchd.log</string>
+</dict>
+</plist>

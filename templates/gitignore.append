@@ -1,0 +1,15 @@
+
+# --- TDD harness ---
+# State is machine-written and local: it records where THIS checkout stands mid-cycle.
+# Committing it makes every pull a merge conflict over a timestamp.
+.claude/state/
+
+# Built projects are their own repos with their own remotes. link_projects.sh clones them.
+projects/
+
+# Generated from state on every run. Hand-editing them is how a board starts lying.
+PROGRESS.md
+HANDOFF.md
+
+# A local bundle can carry .env credentials into a commit.
+*.zip

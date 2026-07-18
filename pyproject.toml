@@ -1,0 +1,5 @@
+# The plugin is not a Python package — this file exists to configure pytest for `tests/`, which
+# guards harness.py itself. Repos scaffolded by /harness-init get their own pyproject per project.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

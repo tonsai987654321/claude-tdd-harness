@@ -1,0 +1,105 @@
+# tdd-harness
+
+A Claude Code plugin that installs a **mechanical RED gate** into a repo: a `PreToolUse` hook that blocks every write to production code until a test has been run and watched to fail.
+
+The rule it enforces is one line — *no production code without a failing test on record* — and the point is that it is enforced by the filesystem rather than by instructions. An instruction in `CLAUDE.md` is a strong prior. A hook that exits 2 is a constraint.
+
+## What it installs
+
+| | |
+|---|---|
+| `.claude/scripts/harness.py` | the gate hook, `red`/`green`, cycle tracking, coverage, token accounting, handoff |
+| `.claude/harness.json` | the only project-specific config: owner, guarded paths, runner definitions |
+| `.claude/cycles/<p>.json` | the ordered TDD cycles per project, with each project's runner and coverage gate |
+| `init.sh` | one command that proves the gate still blocks, then runs every scaffolded suite |
+| `CLAUDE.md`, `CONTEXT.md` | the constitution and the domain glossary |
+| `docs/PLAYBOOK.md`, `docs/adr/`, `docs/LESSONS.md` | how to run it, why it is shaped this way, what went wrong before |
+| agents | `tdd-implementer`, `cycle-reviewer`, `project-auditor`, `reconcile-auditor` |
+| commands | `/harness-init`, `/harness-build`, `/harness-status`, `/harness-continue` |
+
+The installed repo is **self-contained**. Scripts are copied in, not referenced from the plugin, so the gate keeps working in a fresh clone on a machine that has never heard of this plugin — which is the situation any reviewer of the repo is in.
+
+## Install
+
+```
+/harness-init
+```
+
+It will ask for the owner, the projects, and each project's runner and coverage gate, then scaffold and verify. Or drive it directly:
+
+```bash
+python3 scripts/harness_init.py --target /path/to/repo --owner alice \
+  --project billing-api:pytest:90 \
+  --project web:vitest:80 \
+  --purpose "Three services and a console, read by an interviewer."
+```
+
+Non-destructive: existing files are reported and skipped. `.claude/settings.json` and `.gitignore` are **merged**, not replaced.
+
+## How the gate works
+
+```
+Write projects/billing-api/app/tariff.py
+  → PreToolUse hook → harness.py gate
+  → path matches `guarded`, project gate is SHUT
+  → exit 2, write refused
+
+harness.py red billing-api tests/test_tariff.py
+  → runs the test, requires it to FAIL
+  → exit 0 → refused ("a test that passes before the code exists proves nothing")
+  → exit 127 → refused ("infrastructure failure, not a test failure")
+  → honest failure → gate OPEN
+
+Write projects/billing-api/app/tariff.py   → allowed
+harness.py green billing-api               → suite passes, gate SHUT, coverage recorded
+```
+
+The gate is per-project: opening billing-api's gate does not unlock any other project.
+
+Tests, `__init__.py`, config and CI files are never blocked. Neither is anything outside `guarded`.
+
+## Configuration
+
+Everything project-specific lives in `.claude/harness.json`:
+
+```json
+{
+  "owner": "alice",
+  "projects_dir": "projects",
+  "requires": ["python3", "uv"],
+  "guarded": ["app/", "src/", "alembic/versions/", "alembic/env.py"],
+  "runners": {
+    "pytest": {
+      "cmd": ["uv", "run", "pytest"],
+      "red_args": ["-q"],
+      "green_args": ["--cov", "--cov-report=term"],
+      "red_exit_codes": [1, 2],
+      "no_tests_exit": 5,
+      "coverage_re": "^TOTAL\\s+.*?(\\d+)%",
+      "coverage_multiline": true
+    }
+  }
+}
+```
+
+A trailing `/` in `guarded` means "this directory and everything under it"; anything else is an exact filename. Naming `guarded` or `runners` **replaces** the default rather than merging into it — half-overriding the guarded set is how you end up with a gate that protects less than the config appears to say.
+
+`init.sh` generates its self-test probes from `guarded`, so widening the gate widens the check that proves it works.
+
+## What this does not prove
+
+The gate proves **ordering**: a test existed and failed before the code did. It does not prove the test is any good. An `ImportError` counts as RED, and a test that asserts nothing passes the gate exactly like a test that asserts everything.
+
+That gap is why the harness ships a reviewer agent and an evidence rule, and why `harness.py cycle <p> <id> done` refuses without evidence — what ran, what it printed, and the two commit SHAs. A completion nobody can check is indistinguishable from a lie.
+
+Neither mechanism is sufficient alone. A repo that trusts only the gate has automated the appearance of the discipline.
+
+`HARNESS_GATE_BYPASS=1` exists so that a gate nobody can override does not become a hook somebody deletes. It prints to stderr and lands in the transcript. Using it to save time is the single way to make the whole thing worthless.
+
+## Development
+
+```bash
+uv run --with pytest python -m pytest tests/ -q
+```
+
+The suite drives `harness.py` itself — the gate's block/allow decisions, the handoff's refusal to declare done over its own blockers, UTF-8 pinning on every read and write, and the config layer's guarantee that the defaults still compile to the patterns the hardcoded constants used to hold.

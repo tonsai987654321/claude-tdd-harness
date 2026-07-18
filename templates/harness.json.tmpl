@@ -1,0 +1,36 @@
+{
+  "_comment": "The only file in this repo that knows what the projects are. harness.py reads it for the guarded paths and the runner definitions; scripts/link_projects.sh reads owner + project names. Keys omitted here fall back to the defaults in harness.py's DEFAULT_CONFIG.",
+
+  "owner": "{{OWNER}}",
+  "projects_dir": "projects",
+
+  "_requires": "Tools init.sh insists on before it will pass. Drop \"docker\" if nothing here uses testcontainers; drop \"gh\" if the project repos are public or vendored.",
+  "requires": ["python3", "uv", "docker", "gh"],
+
+  "_guarded": "Production code. A trailing slash means the directory and everything under it; anything else is an exact filename. Naming this key REPLACES the default set rather than adding to it.",
+  "guarded": ["app/", "src/", "alembic/versions/", "alembic/env.py"],
+
+  "_runners": "Each project's cycle file names one of these in its \"runner\" key. A name absent from here is a fatal error, not a silent fallback to pytest.",
+  "runners": {
+    "pytest": {
+      "cmd": ["uv", "run", "pytest"],
+      "red_args": ["-q"],
+      "green_args": ["--cov", "--cov-report=term"],
+      "red_exit_codes": [1, 2],
+      "no_tests_exit": 5,
+      "coverage_re": "^TOTAL\\s+.*?(\\d+)%",
+      "coverage_multiline": true,
+      "writable_hint": "app/"
+    },
+    "vitest": {
+      "cmd": ["npx", "vitest", "run"],
+      "red_args": [],
+      "green_args": ["--coverage"],
+      "red_exit_codes": [1],
+      "no_tests_marker": "no test files",
+      "coverage_re": "All files\\s*\\|\\s*([\\d.]+)",
+      "strip_ansi": true,
+      "writable_hint": "src/"
+    }
+  }
+}
