@@ -13,7 +13,11 @@
 # Opt-in: it does nothing until you load the launchd plist (see auto_resume.plist).
 set -euo pipefail
 
-WT="/Users/ton/Desktop/git_collection/electric-portfolio/.claude/worktrees/harness-bootstrap"
+# The harness root, derived from this script's own location (<root>/.claude/scripts/).
+# launchd invokes it by absolute path, so BASH_SOURCE is reliable here. Override with
+# HARNESS_ROOT if you keep the checkout somewhere the script cannot infer.
+_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WT="${HARNESS_ROOT:-$(cd "$_here/../.." && pwd)}"
 LOCK="$WT/.claude/state/.resume.lock"
 LOG="$WT/.claude/state/auto_resume.log"
 CLAUDE_BIN="$(command -v claude || echo "$HOME/.local/bin/claude")"

@@ -28,7 +28,7 @@ The installed repo is **self-contained**. Scripts are copied in, not referenced 
 
 The repo is both the marketplace and the plugin, so one `marketplace add` is enough. `tonsai-plugins` is the marketplace name from `.claude-plugin/marketplace.json`, not the repo name.
 
-The repo is private, so the install uses your existing git credentials — `gh auth login` over HTTPS, or SSH via `ssh-agent`. Background auto-updates disable credential helpers by default; if that bites, set `CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE=1` so a failed pull keeps the last synced state instead of dropping the marketplace.
+Verify what you installed with `/plugin list`, and remove it with `claude plugin uninstall tdd-harness@tonsai-plugins`.
 
 ## Use it
 
@@ -44,7 +44,7 @@ It asks for the owner, the projects, and each project's runner and coverage gate
 python3 scripts/harness_init.py --target /path/to/repo --owner alice \
   --project billing-api:pytest:90 \
   --project web:vitest:80 \
-  --purpose "Three services and a console, read by an interviewer."
+  --purpose "Three services and a console behind one operator login."
 ```
 
 Non-destructive: existing files are reported and skipped. `.claude/settings.json` and `.gitignore` are **merged**, not replaced.
@@ -116,3 +116,7 @@ uv run --with pytest python -m pytest tests/ -q
 ```
 
 The suite drives `harness.py` itself — the gate's block/allow decisions, the handoff's refusal to declare done over its own blockers, UTF-8 pinning on every read and write, and the config layer's guarantee that the defaults still compile to the patterns the hardcoded constants used to hold.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

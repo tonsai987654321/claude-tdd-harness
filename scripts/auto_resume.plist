@@ -1,27 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
+  Replace __HARNESS_ROOT__ with your checkout's absolute path before loading:
+    sed -i '' "s|__HARNESS_ROOT__|$PWD|g" .claude/scripts/auto_resume.plist
+
   launchd fallback that resumes the build after a usage-limit reset, even if
   the Claude session was hard-killed. Ticks every 30 minutes; auto_resume.sh
   no-ops when work is done, a resume is already running, or quota is still out.
 
   Enable (once):
-    cp .claude/scripts/auto_resume.plist ~/Library/LaunchAgents/com.pea.autoresume.plist
-    launchctl load ~/Library/LaunchAgents/com.pea.autoresume.plist
+    cp .claude/scripts/auto_resume.plist ~/Library/LaunchAgents/com.tddharness.autoresume.plist
+    launchctl load ~/Library/LaunchAgents/com.tddharness.autoresume.plist
   Disable:
-    launchctl unload ~/Library/LaunchAgents/com.pea.autoresume.plist
+    launchctl unload ~/Library/LaunchAgents/com.tddharness.autoresume.plist
   Watch:
     tail -f .claude/state/auto_resume.log
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.pea.autoresume</string>
+    <string>com.tddharness.autoresume</string>
 
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/ton/Desktop/git_collection/electric-portfolio/.claude/worktrees/harness-bootstrap/.claude/scripts/auto_resume.sh</string>
+        <string>__HARNESS_ROOT__/.claude/scripts/auto_resume.sh</string>
     </array>
 
     <!-- Every 30 minutes. The script itself is the real guard: it exits fast
@@ -34,8 +37,8 @@
     <false/>
 
     <key>StandardOutPath</key>
-    <string>/Users/ton/Desktop/git_collection/electric-portfolio/.claude/worktrees/harness-bootstrap/.claude/state/auto_resume.launchd.log</string>
+    <string>__HARNESS_ROOT__/.claude/state/auto_resume.launchd.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/ton/Desktop/git_collection/electric-portfolio/.claude/worktrees/harness-bootstrap/.claude/state/auto_resume.launchd.log</string>
+    <string>__HARNESS_ROOT__/.claude/state/auto_resume.launchd.log</string>
 </dict>
 </plist>

@@ -226,7 +226,7 @@ def test_status_reads_a_transcript_holding_non_ascii(harness_root: Path) -> None
         json.dumps(
             {
                 "type": "assistant",
-                "attributionAgent": "pea-tdd-implementer",
+                "attributionAgent": "tdd-implementer",
                 "message": {"usage": {"input_tokens": 1000, "output_tokens": 540}},
             },
             ensure_ascii=False,
@@ -244,5 +244,5 @@ def test_status_reads_a_transcript_holding_non_ascii(harness_root: Path) -> None
     board = (harness_root / "PROGRESS.md").read_text(encoding="utf-8")
     # The Thai task description travels transcript -> board, and the subagent's 1000+540 billable
     # tokens are attributed to it.
-    assert f"pea-tdd-implementer: {agent_task}" in board, board
+    assert f"tdd-implementer: {agent_task}" in board, board
     assert "1.5k" in board, board

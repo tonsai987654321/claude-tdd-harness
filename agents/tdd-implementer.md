@@ -54,7 +54,7 @@ git add -A && git commit -m "feat(<cycle>): <behaviour> [GREEN]"
 ## Rules you do not get to reinterpret
 
 - **No production code without a failing test on record.** A hook enforces this. If you find yourself blocked by it, the answer is to write a test — never to set `HARNESS_GATE_BYPASS`.
-- **Business logic is pure.** `calculate_bill`, `distance_km`, `validate_transition`, the anomaly detectors: no database, no HTTP, no clock, no I/O. They take values and return values. This separation is the project's whole selling point to the interviewer.
+- **Business logic is pure.** The functions that encode the rules take values and return values: no database, no HTTP, no clock, no I/O. Everything else is a thin adapter around them. This is what makes the tests fast and the design defensible.
 - **Stay in your cycle.** Spotted a flaw in an earlier cycle? Report it. Don't fix it.
 - **Stack is fixed by the brief.** Python 3.12, FastAPI, SQLAlchemy 2.0 async, Pydantic v2, Alembic, pytest. No substitutions.
 - **Integration tests use testcontainers**, a real `postgres:16`, per-test transaction rollback. Never sqlite.

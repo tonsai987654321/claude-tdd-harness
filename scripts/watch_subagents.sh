@@ -9,7 +9,10 @@
 # it think in real time.
 set -euo pipefail
 
-SESS_DIR="$HOME/.claude/projects/-Users-ton-Desktop-git-collection-electric-portfolio--claude-worktrees-harness-bootstrap"
+# Claude Code names a project's session dir after its absolute path with every "/"
+# replaced by "-". Derive it rather than hardcoding, so this works in any checkout.
+# Run this from the harness root, or set SESS_DIR yourself.
+SESS_DIR="${SESS_DIR:-$HOME/.claude/projects/$(pwd | sed 's|/|-|g')}"
 
 # Newest session folder, then its subagents dir.
 sub_dir() {
