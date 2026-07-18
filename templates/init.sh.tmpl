@@ -149,12 +149,12 @@ echo "  ok   dashboard renders"
 # The suite under tests/ drives harness.py itself. It is pinned to 3.12 because it relies on
 # EncodingWarning (3.10+) to prove the harness never falls back to the machine's locale codec --
 # on an older interpreter the guard is ignored and every test would pass against broken code.
-if [ -d "$ROOT/tests" ]; then
-  if uv run --no-project --python 3.12 --with pytest pytest "$ROOT/tests" -q >/dev/null 2>&1; then
+if [ -d "$ROOT/.claude/harness-tests" ]; then
+  if uv run --no-project --python 3.12 --with pytest pytest "$ROOT/.claude/harness-tests" -q >/dev/null 2>&1; then
     echo "  ok   harness suite passes"
   else
     echo "FAIL: the harness's own test suite is red. Run:"
-    echo "      uv run --no-project --python 3.12 --with pytest pytest tests -q"
+    echo "      uv run --no-project --python 3.12 --with pytest pytest .claude/harness-tests -q"
     exit 1
   fi
 fi

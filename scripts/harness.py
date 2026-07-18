@@ -132,9 +132,16 @@ def runner_spec(project: str) -> dict:
     cfg = harness_config()
     name = runner_for(project)
     try:
-        return cfg["runners"][name]
+        spec = cfg["runners"][name]
     except KeyError:
         sys.exit(f"harness: project '{project}' declares runner '{name}', which .claude/harness.json does not define.")
+
+    # Fail on the config, not with a traceback three frames into cmd_red. A half-written runner
+    # is a likely thing to hand-edit into harness.json, and the message has to say which key.
+    missing = [k for k in ("cmd", "red_exit_codes") if k not in spec]
+    if missing:
+        sys.exit(f"harness: runner '{name}' in .claude/harness.json is missing required key(s): {', '.join(missing)}.")
+    return spec
 
 
 # ---------------------------------------------------------------- state

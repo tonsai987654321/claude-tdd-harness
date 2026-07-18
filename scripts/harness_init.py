@@ -33,9 +33,11 @@ STATS_HOOK = 'python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" stats --w
 
 # Copied into the target's .claude/scripts/. The harness must keep working in a fresh clone with
 # the plugin uninstalled — a portfolio repo is read by people who do not have your plugins.
+# harness_init.py is deliberately NOT here. It resolves its templates relative to the plugin
+# root, so a copy sitting in the target's .claude/scripts/ looks for .claude/templates/ and dies
+# on FileNotFoundError. Re-scaffolding is the plugin's job, not the scaffolded repo's.
 SCRIPTS = [
     "harness.py",
-    "harness_init.py",
     "next_cycle.py",
     "link_projects.sh",
     "usage_guard.py",
@@ -208,6 +210,12 @@ def main(argv: list[str] | None = None) -> int:
         src = PLUGIN_ROOT / "scripts" / name
         if src.exists():
             writer.copy(src, f".claude/scripts/{name}")
+    # The suite that drives harness.py itself. It goes under .claude/, not the repo's tests/,
+    # because a target repo's tests/ is its own — init.sh running that as "the harness suite"
+    # would report someone else's failing tests as a broken gate.
+    for name in sorted((PLUGIN_ROOT / "tests").glob("test_*.py")):
+        writer.copy(name, f".claude/harness-tests/{name.name}")
+
     for rel in (".claude/state", ".claude/cycles", "brief"):
         (root / rel).mkdir(parents=True, exist_ok=True)
 
