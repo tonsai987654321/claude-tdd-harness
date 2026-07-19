@@ -24,7 +24,7 @@ From the harness root, in Claude Code:
 
 The orchestrator reads `.claude/cycles/<project>.json`, picks the lowest cycle that is not `done`, and dispatches it.
 
-Cycle 0 is scaffolding and the orchestrator does it in the main thread — there is no failing test to write for a `pyproject.toml` or a `package.json`. Cycles 1 and up go to `tdd-implementer`, then to `cycle-reviewer`.
+Cycle 0 is scaffolding and the orchestrator does it in the main thread — there is no failing test to write for a package manifest or a CI workflow. Cycles 1 and up go to `tdd-implementer`, then to `cycle-reviewer`.
 
 ## Watch it
 
@@ -58,7 +58,7 @@ A cycle is `done` only with evidence — what ran, what it printed, the two comm
 
 ```bash
 python3 .claude/scripts/harness.py cycle <project> 1 done \
-  --evidence "pytest 18 passed, cov 94%; ruff clean; mypy --strict clean; a1b2c3d [RED] -> e4f5g6h [GREEN]"
+  --evidence "<runner> 18 passed, cov 94%; quality gates clean; a1b2c3d [RED] -> e4f5g6h [GREEN]"
 ```
 
 It **refuses** without one, and `init.sh` fails on any `done` cycle missing it. A completion nobody can check is indistinguishable from a lie. The evidence comes from the reviewer, which re-runs the gates itself — never from the implementer's own report.
@@ -91,15 +91,16 @@ python3 .claude/scripts/harness.py cycle <project> 5 queued
 
 ## Finishing a project
 
-The Definition of Done is in the project's brief. All of it, not most of it. For a Python service that usually reads:
+The Definition of Done is in the project's brief. All of it, not most of it. The harness-level part is the same whatever the stack:
 
-- [ ] `uv run pytest --cov` — at or above the project's `coverage_gate` in its cycle file
-- [ ] `uv run ruff check . && uv run ruff format --check .`
-- [ ] `uv run mypy --strict app/`
-- [ ] `docker compose up` and the service's docs page loads
-- [ ] migrations apply from an empty database
+- [ ] `harness.py suite <project>` — coverage at or above the `coverage_gate` in its cycle file
+- [ ] `harness.py quality <project>` — every check the runner declares, clean
+- [ ] the service starts from a cold checkout by the documented command
+- [ ] any schema or migration state applies from empty
 - [ ] CI green: install → lint → type-check → test → coverage gate
 - [ ] README: what it is, an architecture diagram, worked examples, the coverage table
+
+The brief adds whatever else the stack demands. What it may not do is drop one of the above.
 
 If the repo is going to be read by someone you are trying to impress, publish it only once it is green:
 
@@ -115,6 +116,23 @@ Drop the brief in `brief/`, write `.claude/cycles/<name>.json` with its cycle or
 
 ## Adding a runner
 
-`.claude/harness.json` defines each runner: the command, the arguments for the RED and GREEN phases, which exit codes count as an honest failure, and how to scrape coverage out of the output. Add a key there and name it in a project's cycle file.
+`.claude/harness.json` defines each runner: the command, the arguments for the RED and GREEN phases, which exit codes count as an honest failure, how to scrape coverage out of the output, and the `quality` commands. Add a key there and name it in a project's cycle file. Nothing else changes — `init.sh`, the implementer, the reviewer and the auditor all run the project's checks through `harness.py quality` and `harness.py suite`, so they follow the config rather than carrying a toolchain of their own.
+
+```json
+"gotest": {
+  "cmd": ["go", "test", "./..."],
+  "red_args": [],
+  "green_args": ["-cover"],
+  "red_exit_codes": [1],
+  "coverage_re": "coverage: ([\\d.]+)% of statements",
+  "writable_hint": "internal/",
+  "quality": [
+    ["gofmt", "-l", "."],
+    ["go", "vet", "./..."]
+  ]
+}
+```
+
+`quality` is a list of argv lists, run in the project directory, in order, stopping at the first non-zero exit. `{guarded}` in any argument expands to `writable_hint` — that is how `mypy --strict {guarded}` stays correct for a project that keeps its source somewhere other than `app/`. A runner with no `quality` key is a hard error rather than a skip: a repo running no quality gates must not look like a repo that passed them all.
 
 The exit codes are the part that matters. A runner that exits non-zero because it could not start is **not** a failing test, and accepting it would open the gate on an infrastructure problem — which is precisely the hole the gate exists to close.

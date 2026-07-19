@@ -12,6 +12,7 @@ Work out these four things. Ask the user only for what you genuinely cannot dete
 2. **Projects** — the names of the projects this harness will build, each with a runner and a coverage gate. If the user has not named them, ask; do not invent projects.
 3. **Runner per project** — `pytest` or `vitest`. The installer rejects anything else rather than scaffolding a cycle file that is fatal at the first `red`; a new runner needs an entry in `.claude/harness.json` first, see the "Adding a runner" section of `docs/PLAYBOOK.md`.
 4. **Purpose** — one paragraph on what these projects are and who reads them. It becomes the opening of `CLAUDE.md` and it is what stops a later session inventing scope.
+5. **Stack** — the languages, frameworks and versions, in one line. It goes into `.claude/harness.json` under `stack`, which is where every agent reads it. Ask if the user has not said; do not infer one from the runner. An agent handed a TODO here will choose a stack on your behalf and be right to, because nothing else told it otherwise.
 
 If the repo already has a `.claude/settings.json`, say so before running. The installer merges into it rather than replacing it, but the user should know their config is being touched.
 
@@ -49,6 +50,6 @@ The installer leaves stubs, not a finished harness. Tell the user plainly what i
 1. **Write the briefs** under `brief/`. The harness builds what the specs say and nothing more; an empty brief is how a build turns into invention.
 2. **Lift each brief's cycle list** into `.claude/cycles/<project>.json`. The two-cycle stub is a placeholder, not a plan.
 3. **Fill in `CONTEXT.md`** before any code uses domain words. A term that is not in there does not exist in the codebase.
-4. **Set the stack** in `CLAUDE.md` where it says TODO.
+4. **Set the stack** in `.claude/harness.json` if it still says TODO. `CLAUDE.md` renders that value; editing the constitution alone changes what people read and not what the agents are told.
 
 Do not do steps 1–4 unprompted. They encode decisions the user has not made yet, and a plausible-looking brief you invented is worse than an empty one.

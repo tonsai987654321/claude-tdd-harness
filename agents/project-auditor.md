@@ -24,24 +24,14 @@ A dirty tree means someone was mid-edit and the audit would measure something th
 
 ## 2. Run the gates and paste what they printed
 
-Which gates to run follows the project's `runner`, declared in `.claude/cycles/<project>.json`.
-
-For a `pytest` project:
+Do not decide which commands those are. The project's runner declares them in `.claude/harness.json`, and the harness runs them:
 
 ```bash
-uv run ruff check . && uv run ruff format --check .
-uv run mypy --strict app/
-uv run pytest --cov -q
+python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" quality <project>
+python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" suite <project>
 ```
 
-For a `vitest` project:
-
-```bash
-[ -d node_modules ] || npm ci --silent
-npm run typecheck
-npm run lint
-npm run coverage
-```
+`quality` is the linter, formatter and type checker; `suite` runs the tests with coverage and changes no state, so auditing a project mid-cycle cannot shut a gate that cycle opened. An audit that typed its own `ruff` and `mypy` would report a clean project as ungated the moment someone switched to `flake8`, and would report nothing at all for a stack neither command belongs to.
 
 If the project's integration tests need something the environment cannot provide — Docker for testcontainers, a database, a network — say so plainly. **A suite that could not run is not a suite that passed**, and reporting it as green is the exact failure this audit exists to catch.
 
@@ -60,7 +50,7 @@ For each cycle id, find the commits that implemented it. The conventions drifted
 ```
 test(cycle-7): <behaviour> [RED]        feat(cycle-7): <behaviour> [GREEN]
 [RED] billing.* schema: <behaviour>     [GREEN] billing.* schema: <behaviour>
-test(alembic): <behaviour>              fix(alembic): <behaviour>
+test(migrations): <behaviour>           fix(migrations): <behaviour>
 ```
 
 Map what maps. **Where you cannot tell which cycle a commit belongs to, say so.** A cycle you cannot tie to a commit is a real finding, and so is a commit that belongs to no cycle — a project's log commonly runs past the ids its cycle file defines. Guessing here defeats the entire purpose of the audit; an honest `unmappable` is worth more than a plausible mapping.
@@ -83,9 +73,8 @@ head:    <sha> <subject>
 commits: <n>
 
 GATES (raw):
-  ruff/typecheck : <the actual final line printed>
-  mypy/lint      : <the actual final line printed>
-  suite+coverage : <the actual final line printed>
+  quality : <one line per check the runner declared, as printed>
+  suite   : <the actual final line printed>
   coverage       : <n>% (gate <m>%) — MEETS | BELOW | NOT MEASURED
 
 CYCLE MAP:

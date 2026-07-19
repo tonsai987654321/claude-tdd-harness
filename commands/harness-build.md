@@ -41,7 +41,9 @@ You are the **orchestrator** for `$1`. You do not write project code yourself �
 
 ## Cycle 0 is different
 
-There is no failing test to write for scaffolding. Do it yourself in the main thread: `pyproject.toml` (uv), `tests/conftest.py` with the testcontainers fixture, `docker-compose.yml`, `Dockerfile`, `alembic/`, `.github/workflows/ci.yml`, `.env.example`. The gate does not block these — it guards `app/` only. The first `app/` file you create must be demanded by a failing test in cycle 1.
+There is no failing test to write for scaffolding, so do it yourself in the main thread. What belongs here is whatever the `stack` in `.claude/harness.json` needs before a test can run at all: the package manifest and lockfile, the test runner's config and fixtures, any container or compose file the integration tests require, the CI workflow, and an example environment file. Read the brief and the stack — do not reach for a file list from another project.
+
+The gate does not block any of it: it guards only the paths in `guarded`. The first file you create *under* a guarded path must be demanded by a failing test in cycle 1, and that is the line cycle 0 must not cross.
 
 ## Between cycles
 

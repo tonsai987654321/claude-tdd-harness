@@ -17,7 +17,7 @@ The orchestrator gives you: the project name, the cycle id, the cycle title, and
 python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" red <project> <test-path>
 ```
 
-This runs pytest and *requires* a failure. If the test passes, you wrote a test that proves nothing — fix it. Only on a real failure does the gate open and `app/` become writable.
+This runs the project's test runner and *requires* a failure. If the test passes, you wrote a test that proves nothing — fix it. Only on a real failure does the gate open and `app/` become writable.
 
 A failure from `ImportError` (the module doesn't exist yet) is a legitimate RED. That is the normal first failure of a cycle.
 
@@ -40,10 +40,11 @@ This runs the full suite with coverage. It shuts the gate on success, which mean
 **4. Quality gates.** All three must pass before you report back:
 
 ```bash
-uv run ruff check . && uv run ruff format --check .
-uv run mypy --strict app/
-uv run pytest --cov --cov-report=term
+python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" quality <project>
+python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" green <project>
 ```
+
+The commands behind `quality` are declared per runner in `.claude/harness.json`. Run them through the harness rather than typing a linter's name: a project that lints with something else is still covered, and the evidence line then reports what the repo actually enforces.
 
 Commit:
 
@@ -56,8 +57,8 @@ git add -A && git commit -m "feat(<cycle>): <behaviour> [GREEN]"
 - **No production code without a failing test on record.** A hook enforces this. If you find yourself blocked by it, the answer is to write a test — never to set `HARNESS_GATE_BYPASS`.
 - **Business logic is pure.** The functions that encode the rules take values and return values: no database, no HTTP, no clock, no I/O. Everything else is a thin adapter around them. This is what makes the tests fast and the design defensible.
 - **Stay in your cycle.** Spotted a flaw in an earlier cycle? Report it. Don't fix it.
-- **Stack is fixed by the brief.** Python 3.12, FastAPI, SQLAlchemy 2.0 async, Pydantic v2, Alembic, pytest. No substitutions.
-- **Integration tests use testcontainers**, a real `postgres:16`, per-test transaction rollback. Never sqlite.
+- **The stack is not yours to choose.** It is the `stack` key in `.claude/harness.json`, rendered into `CLAUDE.md`. Read it before you write an import. If it is still a TODO, stop and say so — building against a stack nobody declared is how a repo ends up with two.
+- **Test doubles are a last resort.** Where the brief calls for integration tests, run them against the real dependency, not a substitute that agrees with you.
 
 ## Report back
 
@@ -73,7 +74,7 @@ Return to the orchestrator, and nothing else:
 End your report with an **evidence line** the orchestrator can paste verbatim. It records what actually ran and what it printed — not what you intended to run:
 
 ```
-EVIDENCE: pytest 24 passed, cov 93%; ruff clean; mypy --strict clean; a1b2c3d [RED] -> e4f5g6h [GREEN]
+EVIDENCE: <runner> 24 passed, cov 93%; quality gates clean; a1b2c3d [RED] -> e4f5g6h [GREEN]
 ```
 
 The harness refuses to mark a cycle done without it. Do not write an evidence line for a command you did not run.

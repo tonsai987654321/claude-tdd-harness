@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
+  macOS only — this is a launchd agent. On Linux use a systemd timer or cron entry that runs
+  the same auto_resume.sh; on Windows, a Task Scheduler task. The script is the portable part.
+
   Replace __HARNESS_ROOT__ with your checkout's absolute path before loading:
     sed -i '' "s|__HARNESS_ROOT__|$PWD|g" .claude/scripts/auto_resume.plist
 

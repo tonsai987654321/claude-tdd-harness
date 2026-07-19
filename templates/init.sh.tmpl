@@ -25,11 +25,11 @@ need() {
 
 hint_for() {
   case "$1" in
-    python3) echo "install Python 3.12+" ;;
-    uv)      echo "https://docs.astral.sh/uv/ (brew install uv)" ;;
-    docker)  echo "install Docker Desktop" ;;
-    gh)      echo "brew install gh" ;;
-    node|npm) echo "install Node 20+" ;;
+    python3) echo "Python 3.12+ — https://www.python.org/downloads/" ;;
+    uv)      echo "https://docs.astral.sh/uv/getting-started/installation/" ;;
+    docker)  echo "https://docs.docker.com/get-started/get-docker/" ;;
+    gh)      echo "https://cli.github.com/" ;;
+    node|npm) echo "Node 20+ — https://nodejs.org/en/download" ;;
     *)       echo "required by .claude/harness.json" ;;
   esac
 }
@@ -38,6 +38,9 @@ hint_for() {
 # from `requires` because the gate self-test below is the one thing this script exists to prove,
 # and it must not be reachable only on a machine that also happens to have Docker running. The
 # project's tools are checked further down, next to the suites that need them.
+# uv is here even for a repo with no Python project in it: it is how the harness runs its OWN
+# suite in an isolated 3.12 environment, without installing anything into the machine or assuming
+# the project's package manager. It is a harness dependency, not a statement about your stack.
 echo "=== Harness prerequisites ==="
 need python3 "$(hint_for python3)"
 need uv "$(hint_for uv)"
@@ -213,7 +216,7 @@ cfg=json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
 sys.exit(0 if "docker" in cfg.get("requires",[]) else 1)'; then
   docker info >/dev/null 2>&1 || {
     echo "FAIL: the Docker daemon is not running."
-    echo "      Integration tests use testcontainers and will fail at the first fixture."
+    echo "      \"docker\" is in requires, so a project here expects it — its tests will fail at the first fixture."
     exit 1
   }
   echo "  ok   docker daemon"
@@ -230,56 +233,35 @@ fi
 
 echo
 echo "=== Project suites ==="
-# Only projects that have been scaffolded. An unscaffolded project is not a failure.
+# One project per cycle file, each with the runner it declared. Nothing about which tools a
+# project uses is written here: `harness.py quality` and `green` read the commands out of
+# .claude/harness.json. Sniffing for pyproject.toml and package.json — which is what this loop
+# used to do — meant a repo on poetry, go or cargo silently reported "not scaffolded yet" and
+# never ran a single check.
 PROJECTS_DIR="$(python3 -c '
 import json, pathlib
 p = pathlib.Path(".claude/harness.json")
 cfg = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
 print(cfg.get("projects_dir", "projects"))
 ')"
-shopt -s nullglob
+
 found=0
-for d in "$PROJECTS_DIR"/*/; do
-  found=1
-  p=$(basename "$d")
-  if [ -f "$d/pyproject.toml" ]; then
-    echo "--- $p"
-    (
-      cd "$d"
-      uv run ruff check . && uv run ruff format --check .
-
-      # A freshly scaffolded project has no app/ yet: the first module there must be
-      # demanded by a failing test, not by the linter.
-      if [ -d app ] && [ -n "$(find app -name '*.py' -not -name '__init__.py' -print -quit)" ]; then
-        uv run mypy --strict app/
-      else
-        echo "  skip mypy (no app/ modules yet)"
-      fi
-
-      # pytest exit 5 == "no tests collected". Before the first cycle that is the correct
-      # state, not a failure. Any other non-zero exit is a real one.
-      uv run pytest --cov -q || [ $? -eq 5 ]
-    )
-  elif [ -f "$d/package.json" ]; then
-    # A frontend is a project like any other, and it has a mechanical gate of its own.
-    # Gating this loop on pyproject.toml alone quietly reports it "not scaffolded" and never
-    # runs a single test — a whole suite can rot green-looking, unwatched.
-    echo "--- $p"
-    (
-      cd "$d"
-      # npm ci, not npm install: install rewrites package-lock.json, which silently drifts the
-      # verified dependency set away from the one CI pins.
-      [ -d node_modules ] || npm ci --silent
-      npm run typecheck
-      npm run lint
-      npm run coverage
-    )
-  else
-    echo "  skip $p (not scaffolded yet)"
+for cyclefile in .claude/cycles/*.json; do
+  [ -e "$cyclefile" ] || continue
+  p="$(basename "$cyclefile" .json)"
+  d="$PROJECTS_DIR/$p"
+  if [ ! -d "$d" ]; then
+    echo "  skip $p (not cloned into $PROJECTS_DIR/ yet)"
+    continue
   fi
+  found=1
+  echo "--- $p"
+  python3 "$H" quality "$p"
+  # `suite`, not `green`: green shuts the gate on success, and running the health check in the
+  # middle of a RED cycle must not close a gate that cycle legitimately opened.
+  python3 "$H" suite "$p"
 done
-[ "$found" = "1" ] || echo "  no projects cloned into $PROJECTS_DIR/ yet"
-shopt -u nullglob
+[ "$found" = "1" ] || echo "  nothing to run yet — link_projects.sh clones the project repos"
 
 echo
 echo "=== Verification complete ==="

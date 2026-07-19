@@ -47,17 +47,16 @@ VERSION_FILE = ".claude/.harness-version"
 KNOWN_RUNNERS = ("pytest", "vitest")
 NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
 
+# Tests that drive the installer rather than the gate. They stay in the plugin: the installer is
+# deliberately not vendored, so a copy of its suite in a scaffolded repo tests a file that is not
+# there and reports the harness red. Which is exactly what it did, once.
+NOT_VENDORED = {"test_install.py"}
+
 # Copied into the target's .claude/scripts/. The harness must keep working in a fresh clone with
 # the plugin uninstalled — a portfolio repo is read by people who do not have your plugins.
 # harness_init.py is deliberately NOT here. It resolves its templates relative to the plugin
 # root, so a copy sitting in the target's .claude/scripts/ looks for .claude/templates/ and dies
-# on FileNotFoundError. Re-scaffolding is the plugin's job, not the scaffolded repo's.
-# Tests that drive the installer rather than the gate. They stay in the plugin: the installer is
-# deliberately not vendored (it resolves templates relative to __file__ and dies from
-# .claude/scripts/ — docs/lessons/0003), so a copy of its suite in a scaffolded repo tests a file
-# that is not there and reports the harness red. Which is exactly what it did, once.
-NOT_VENDORED = {"test_install.py"}
-
+# on FileNotFoundError (docs/lessons/0003). Re-scaffolding is the plugin's job.
 SCRIPTS = [
     "harness.py",
     "next_cycle.py",
@@ -326,6 +325,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--purpose", default="", help="one paragraph: what these projects are for")
     ap.add_argument(
+        "--stack",
+        default="",
+        help="what the projects are built with, with versions. Written to .claude/harness.json "
+        "and rendered into CLAUDE.md; the agents read it from there rather than carrying one.",
+    )
+    ap.add_argument(
         "--reset",
         action="append",
         default=[],
@@ -392,12 +397,17 @@ def main(argv: list[str] | None = None) -> int:
         (root / rel).mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------- repo-owned (preserved)
+    stack = args.stack or "TODO: name the stack, with versions. Until this says something, an agent asked to build will pick one for you."
     writer.write(
         ".claude/harness.json",
         render(
             "harness.json.tmpl",
             OWNER=args.owner or "CHANGE-ME",
             REQUIRES=json.dumps(derive_requires(projects)),
+            # json.dumps, not the raw string: a stack description with a quote or a backslash in
+            # it would otherwise produce a harness.json that does not parse, and every command
+            # would fall back to DEFAULT_CONFIG without saying so.
+            STACK=json.dumps(stack)[1:-1],
         ),
     )
 
@@ -416,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
             PROJECTS_DIR="projects",
             PURPOSE=args.purpose or "TODO: one paragraph — what these projects are, and who reads them.",
             QUALITY_GATES=quality,
-            STACK="TODO: name the stack here. Fixed by the briefs, not open for improvement.",
+            STACK=stack,
         ),
     )
     writer.write(
@@ -455,8 +465,11 @@ def main(argv: list[str] | None = None) -> int:
     print("  2. Lift each brief's cycle list into .claude/cycles/<project>.json (the stubs are placeholders).")
     print("  3. Fill in CONTEXT.md before writing code that uses domain words.")
     print("  4. Run ./init.sh — it must prove the gate blocks before you trust it.")
+    if not args.stack:
+        print('  5. Set "stack" in .claude/harness.json. Every agent reads it from there; while it')
+        print("     says TODO, an agent asked to build will choose a stack on your behalf.")
     if not args.owner:
-        print('  5. Set "owner" in .claude/harness.json (currently CHANGE-ME) or link_projects.sh cannot clone.')
+        print('  6. Set "owner" in .claude/harness.json (currently CHANGE-ME) or link_projects.sh cannot clone.')
     return 0
 
 

@@ -17,13 +17,13 @@ You audit one finished TDD cycle. You do not fix anything. You return a verdict:
 
 **Coverage did not regress.** Compare against the `coverage` field in `.claude/state/<project>.json`.
 
-**Gates are green.** `uv run ruff check .`, `uv run mypy --strict app/`, `uv run pytest -q`. Run them. Do not take the implementer's word for it — the implementer is the least reliable witness to its own work.
+**Gates are green.** Run `harness.py quality <project>` and `harness.py suite <project>` yourself — they execute whatever `.claude/harness.json` declares for this project's runner. Do not take the implementer's word for it; the implementer is the least reliable witness to its own work.
 
 **Scope.** The diff should touch only what the cycle needed. Files from a later cycle appearing early is REWORK.
 
 ## What you do not check
 
-Style preferences. Naming you'd have chosen differently. Anything `ruff` already has an opinion about.
+Style preferences. Naming you'd have chosen differently. Anything the project's own linter already has an opinion about.
 
 ## Output
 

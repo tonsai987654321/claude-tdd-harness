@@ -9,6 +9,8 @@ Subcommands
     gate      PreToolUse hook. Blocks edits to production code while the RED gate is shut.
     red       Run a test, require it to fail, open the gate for one project.
     green     Run the full suite; on pass, shut the gate and record coverage.
+    quality   Run the project's linter/formatter/type-checker, as declared by its runner.
+    suite     Run the project's tests read-only: no gate change, no coverage recorded.
     cycle     Move a TDD cycle between states. `done` requires --evidence.
     status    Render the dashboard to stdout and to PROGRESS.md.
     stats     Attribute token usage to each subagent from the session transcript.
@@ -44,6 +46,9 @@ CONFIG_PATH = ROOT / ".claude" / "harness.json"
 # working gate for a Python/`app/` or a JS/`src/` layout.
 DEFAULT_CONFIG: dict = {
     "projects_dir": "projects",
+    # What the projects are built with. Declared once, here, because four different places used
+    # to each name a stack in prose and only one of them was the one the implementer obeyed.
+    "stack": "TODO: declare the stack in .claude/harness.json",
     # Production code. Touching it requires a failing test on record. A trailing "/" means "this
     # directory and everything under it"; anything else is an exact filename.
     #
@@ -73,6 +78,15 @@ DEFAULT_CONFIG: dict = {
             "coverage_re": r"^TOTAL\s+.*?(\d+)%",
             "coverage_multiline": True,
             "writable_hint": "app/",
+            # The quality gates, as argv lists run in the project directory. `{guarded}` expands
+            # to writable_hint. These live in the config for the same reason the test command
+            # does: a repo on poetry, pylint or pyright is not a different harness, it is a
+            # different four lines. Naming them in an agent prompt made them unreachable.
+            "quality": [
+                ["uv", "run", "ruff", "check", "."],
+                ["uv", "run", "ruff", "format", "--check", "."],
+                ["uv", "run", "mypy", "--strict", "{guarded}"],
+            ],
         },
         "vitest": {
             "cmd": ["npx", "vitest", "run"],
@@ -88,6 +102,10 @@ DEFAULT_CONFIG: dict = {
             "coverage_re": r"All files\s*\|\s*([\d.]+)",
             "strip_ansi": True,
             "writable_hint": "src/",
+            "quality": [
+                ["npm", "run", "typecheck"],
+                ["npm", "run", "lint"],
+            ],
         },
     },
 }
@@ -185,7 +203,10 @@ def known_projects() -> list[str]:
 
 
 def project_dir(project: str) -> Path:
-    return ROOT / "projects" / project
+    # `projects_dir` is configurable everywhere else — the gate patterns, init.sh, link_projects.sh.
+    # Hardcoding it here meant a repo that set it to anything else got a gate that guarded the
+    # configured directory and a runner that looked in a directory that did not exist.
+    return ROOT / harness_config()["projects_dir"] / project
 
 
 def project_config(project: str) -> dict:
@@ -299,6 +320,64 @@ def run_suite(project: str, spec: dict, args: list[str]) -> tuple[int, str]:
     out = proc.stdout + proc.stderr
     print(out)
     return proc.returncode, out
+
+
+def cmd_quality(project: str) -> None:
+    """Run the project's quality gates, in order, stopping at the first failure.
+
+    These used to be prose. `init.sh` named `uv run ruff` and `uv run mypy --strict app/`, the
+    implementer agent named them again, the reviewer agent named them a third time, and the
+    auditor a fourth — four copies of one fact, none of them reachable by a repo that lints with
+    anything else. Naming them here means a project on poetry, pylint or pyright changes its
+    config and nothing else, exactly as `red` and `green` already worked.
+    """
+    spec = runner_spec(project)
+    commands = spec.get("quality")
+    if not commands:
+        # Not a skip. A repo whose quality gates cannot be found is a repo running none of them,
+        # and it looks identical in the output to one that passed them all.
+        sys.exit(
+            f"harness: runner '{runner_for(project)}' in .claude/harness.json defines no \"quality\" "
+            "commands, so the quality gates are not being run at all. Add them — see the "
+            "'Adding a runner' section of docs/PLAYBOOK.md — or state plainly that this project "
+            "has none."
+        )
+
+    guarded = spec.get("writable_hint", ".")
+    for raw in commands:
+        cmd = [str(part).replace("{guarded}", guarded) for part in raw]
+        printable = " ".join(cmd)
+        print(f"--- {printable}")
+        resolved = list(cmd)
+        # Same reason as run_suite: a bare `npm` is `npm.cmd` on Windows and subprocess without a
+        # shell will not find it.
+        resolved[0] = shutil.which(resolved[0]) or resolved[0]
+        proc = subprocess.run(resolved, cwd=project_dir(project), capture_output=True, **DECODE)
+        print(proc.stdout + proc.stderr)
+        if proc.returncode != 0:
+            sys.exit(f"harness: quality gate failed for {project}: {printable} (exit {proc.returncode})")
+    n = len(commands)
+    print(f"harness: quality gates pass for {project} ({n} check{'' if n == 1 else 's'}).")
+
+
+def cmd_suite(project: str) -> None:
+    """Run the project's tests and report, without touching gate state or coverage.
+
+    `green` is the wrong command for a health check: it shuts the gate on success. Calling it
+    from `init.sh` would mean that running the one verification entrypoint in the middle of a RED
+    cycle silently closed the gate the cycle had legitimately opened, and the implementer's next
+    write would be refused for no reason it could see.
+    """
+    spec = runner_spec(project)
+    code, _ = run_suite(project, spec, spec.get("green_args", []))
+    if code == 0:
+        return
+    # Before the first cycle there is genuinely nothing to collect, and that is the correct state
+    # for a freshly scaffolded project rather than a failure.
+    if code == spec.get("no_tests_exit"):
+        print(f"harness: no tests in {project} yet.")
+        return
+    sys.exit(f"harness: suite failed for {project} (exit {code}).")
 
 
 def scrape_coverage(spec: dict, out: str) -> int | None:
@@ -775,6 +854,14 @@ def main() -> None:
         cmd_red(args[0], args[1:])
     elif cmd == "green":
         cmd_green(args[0])
+    elif cmd == "quality":
+        if not args:
+            sys.exit("usage: harness.py quality <project>")
+        cmd_quality(args[0])
+    elif cmd == "suite":
+        if not args:
+            sys.exit("usage: harness.py suite <project>")
+        cmd_suite(args[0])
     elif cmd == "cycle":
         evidence = None
         if "--evidence" in args:

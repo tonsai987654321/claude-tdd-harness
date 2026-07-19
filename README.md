@@ -39,7 +39,7 @@ In the repo you want the harness installed into:
 /harness-init
 ```
 
-It asks for the owner, the projects, and each project's runner and coverage gate, then scaffolds and verifies. Or drive the scaffolder directly, without the plugin:
+It asks for the owner, the projects, each project's runner and coverage gate, and the stack, then scaffolds and verifies. Or drive the scaffolder directly, without the plugin:
 
 ```bash
 python3 scripts/harness_init.py --target /path/to/repo --owner alice \
@@ -111,6 +111,8 @@ A trailing `/` in `guarded` means "this directory and everything under it"; anyt
 
 `init.sh` generates its self-test probes from `guarded`, so widening the gate widens the check that proves it works.
 
+**Nothing outside this file names a tool.** `stack` is where the toolchain is declared and the agents read it from there; `quality` is the linter, formatter and type checker, run by `harness.py quality <project>`, with `{guarded}` expanding to `writable_hint`. `init.sh`, the implementer, the reviewer and the auditor all go through the harness, so a project on poetry, pyright, golangci-lint or cargo changes this file and nothing else. It did not used to be true — four places each named a stack and only one of them was the one the implementer obeyed, which is [lesson 0007](docs/lessons/0007-an-abstraction-that-stops-halfway-hides-where-it-stopped.md).
+
 ## Reference documents
 
 Lessons and ADRs are reference material, and reference material only earns its keep when the agent who needs one actually reads it. Both are read through an index rather than loaded:
@@ -124,7 +126,7 @@ The full text of an entry is opened only when its trigger matches the work in ha
 
 That leaves the index itself as the thing that grows, and the answer to that is retirement rather than shorter prose. When a lesson's failure mode has been made mechanically impossible — a gate probe, a test, a lint rule — it is marked `**Status:** mechanised` with the check named in `**Enforced by:**`, and it drops out of the index. **The check is the lesson now.** The prose stays as the reason the check exists, for whoever finds that check inconvenient later.
 
-Three of the six lessons in this repo are already retired that way.
+Four of the seven lessons in this repo are already retired that way.
 
 ## What this does not prove
 

@@ -34,7 +34,7 @@ Before writing code:
 All five, or it is not done:
 
 - [ ] The behaviour is implemented and the cycle's tests pass
-- [ ] The quality gates actually ran ({{QUALITY_GATES}})
+- [ ] The quality gates actually ran — `harness.py quality <project>`, which runs {{QUALITY_GATES}}
 - [ ] **Evidence recorded** — what ran, what it printed, the `[RED]` and `[GREEN]` SHAs
 - [ ] The repo still starts from `./init.sh`
 - [ ] **Anything surprising is written down** — see below. Nothing surprising happened is a fine answer; "no time" is not.
@@ -100,6 +100,8 @@ HANDOFF.md                  generated next-action for the next session; never ha
 | `/harness-status` | dashboard: cycles, gate, coverage, per-subagent tokens |
 | `harness.py red <project> <test>` | run a test, require failure, open the gate |
 | `harness.py green <project>` | run the suite, shut the gate, record coverage |
+| `harness.py quality <project>` | the linter, formatter and type checker this project declares |
+| `harness.py suite <project>` | run the tests read-only — no gate change, no coverage recorded |
 | `harness.py cycle <p> <id> done --evidence "…"` | close a cycle; refuses without evidence |
 | `harness.py handoff` | write `HANDOFF.md` for the next session |
 | `harness.py lessons` / `adrs` | the reference index — read before dispatching, open only what applies |
@@ -107,6 +109,9 @@ HANDOFF.md                  generated next-action for the next session; never ha
 ## Stack — fixed by the briefs, not open for improvement
 
 {{STACK}}
+
+Declared in `.claude/harness.json` under `stack`, which is where the agents read it. This section
+renders that value; if the two ever disagree, the config is the one that runs.
 
 ## Working agreements
 

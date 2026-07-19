@@ -174,6 +174,34 @@ def test_reinstall_repoints_rather_than_duplicating_the_hook(repo: Path) -> None
     assert "/some/other/python" not in gate[0]
 
 
+def test_stack_is_declared_once_and_rendered_from_there(tmp_path: Path) -> None:
+    """Four places used to name a stack in prose and only one of them was obeyed.
+
+    `{{STACK}}` in the constitution was a placeholder no agent read, while the implementer agent
+    carried a different stack as a rule it was told not to reinterpret. Now the config is the
+    declaration and CLAUDE.md renders it.
+    """
+    subprocess.run(
+        [sys.executable, str(INSTALLER), "--target", str(tmp_path), "--project", "api:pytest:90",
+         "--stack", "Go 1.23, chi, sqlc"],
+        capture_output=True, text=True, check=True,
+    )
+    cfg = json.loads((tmp_path / ".claude" / "harness.json").read_text(encoding="utf-8"))
+    assert cfg["stack"] == "Go 1.23, chi, sqlc"
+    assert "Go 1.23, chi, sqlc" in (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+
+
+def test_a_stack_with_quotes_still_produces_valid_json(tmp_path: Path) -> None:
+    """A config that does not parse falls back to DEFAULT_CONFIG without saying so."""
+    subprocess.run(
+        [sys.executable, str(INSTALLER), "--target", str(tmp_path), "--project", "api:pytest:90",
+         "--stack", 'Python 3.12 with "strict" typing'],
+        capture_output=True, text=True, check=True,
+    )
+    cfg = json.loads((tmp_path / ".claude" / "harness.json").read_text(encoding="utf-8"))
+    assert '"strict"' in cfg["stack"]
+
+
 def test_requires_omits_tools_the_chosen_runners_do_not_need(tmp_path: Path) -> None:
     """Defaulting to docker aborted init.sh in the environment check, before the gate self-test.
 

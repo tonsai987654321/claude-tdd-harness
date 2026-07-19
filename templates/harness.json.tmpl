@@ -4,13 +4,16 @@
   "owner": "{{OWNER}}",
   "projects_dir": "projects",
 
+  "_stack": "What the projects are built with. The ONE place it is declared: the constitution renders it, and the implementer, reviewer and auditor agents are told to read it here rather than carrying a stack of their own. Name versions — an agent handed \"Python, a web framework\" will pick one.",
+  "stack": "{{STACK}}",
+
   "_requires": "Tools the PROJECT suites need, checked by init.sh just before it runs them. Derived from the runners you scaffolded with; add \"docker\" if a project uses testcontainers, \"gh\" if init.sh should insist on an authenticated CLI. The harness's own prerequisites are not listed here — init.sh checks python3 and uv itself, so that a missing project tool can never stop the gate self-test from running.",
   "requires": {{REQUIRES}},
 
   "_guarded": "Production code. A trailing slash means the directory and everything under it; anything else is an exact filename. Naming this key REPLACES the default set rather than adding to it.",
   "guarded": ["app/", "src/", "alembic/versions/", "alembic/env.py"],
 
-  "_runners": "Each project's cycle file names one of these in its \"runner\" key. A name absent from here is a fatal error, not a silent fallback to pytest.",
+  "_runners": "Each project's cycle file names one of these in its \"runner\" key. A name absent from here is a fatal error, not a silent fallback to pytest. \"quality\" is the linter/formatter/type-checker, as argv lists run in the project directory by `harness.py quality <project>`; `{guarded}` expands to writable_hint. Swap ruff for flake8, or mypy for pyright, by editing this and nothing else — init.sh and every agent read the commands from here.",
   "runners": {
     "pytest": {
       "cmd": ["uv", "run", "pytest"],
@@ -20,7 +23,12 @@
       "no_tests_exit": 5,
       "coverage_re": "^TOTAL\\s+.*?(\\d+)%",
       "coverage_multiline": true,
-      "writable_hint": "app/"
+      "writable_hint": "app/",
+      "quality": [
+        ["uv", "run", "ruff", "check", "."],
+        ["uv", "run", "ruff", "format", "--check", "."],
+        ["uv", "run", "mypy", "--strict", "{guarded}"]
+      ]
     },
     "vitest": {
       "cmd": ["npx", "vitest", "run"],
@@ -30,7 +38,11 @@
       "no_tests_marker": "no test files",
       "coverage_re": "All files\\s*\\|\\s*([\\d.]+)",
       "strip_ansi": true,
-      "writable_hint": "src/"
+      "writable_hint": "src/",
+      "quality": [
+        ["npm", "run", "typecheck"],
+        ["npm", "run", "lint"]
+      ]
     }
   }
 }
