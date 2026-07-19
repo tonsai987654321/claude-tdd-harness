@@ -13,7 +13,7 @@
   "_guarded": "Production code. A trailing slash means the directory and everything under it; anything else is an exact filename. Naming this key REPLACES the default set rather than adding to it.",
   "guarded": ["app/", "src/", "alembic/versions/", "alembic/env.py"],
 
-  "_runners": "Each project's cycle file names one of these in its \"runner\" key. A name absent from here is a fatal error, not a silent fallback to pytest. \"quality\" is the linter/formatter/type-checker, as argv lists run in the project directory by `harness.py quality <project>`; `{guarded}` expands to writable_hint. Swap ruff for flake8, or mypy for pyright, by editing this and nothing else — init.sh and every agent read the commands from here.",
+  "_runners": "Each project's cycle file names one of these in its \"runner\" key. A name absent from here is a fatal error, not a silent fallback to pytest. \"quality\" is the linter/formatter/type-checker, as argv lists run in the project directory by `harness.py quality <project>`; `{writable}` expands to writable_hint. Swap ruff for flake8, or mypy for pyright, by editing this and nothing else — init.sh and every agent read the commands from here.",
   "runners": {
     "pytest": {
       "cmd": ["uv", "run", "pytest"],
@@ -27,7 +27,7 @@
       "quality": [
         ["uv", "run", "ruff", "check", "."],
         ["uv", "run", "ruff", "format", "--check", "."],
-        ["uv", "run", "mypy", "--strict", "{guarded}"]
+        ["uv", "run", "mypy", "--strict", "{writable}"]
       ]
     },
     "vitest": {

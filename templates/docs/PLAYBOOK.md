@@ -133,6 +133,6 @@ Drop the brief in `brief/`, write `.claude/cycles/<name>.json` with its cycle or
 }
 ```
 
-`quality` is a list of argv lists, run in the project directory, in order, stopping at the first non-zero exit. `{guarded}` in any argument expands to `writable_hint` — that is how `mypy --strict {guarded}` stays correct for a project that keeps its source somewhere other than `app/`. A runner with no `quality` key is a hard error rather than a skip: a repo running no quality gates must not look like a repo that passed them all.
+`quality` is a list of argv lists, run in the project directory, in order, stopping at the first non-zero exit. `{writable}` in any argument expands to `writable_hint` — that is how `mypy --strict {writable}` stays correct for a project that keeps its source somewhere other than `app/`. A runner with no `quality` key is a hard error rather than a skip: a repo running no quality gates must not look like a repo that passed them all.
 
 The exit codes are the part that matters. A runner that exits non-zero because it could not start is **not** a failing test, and accepting it would open the gate on an infrastructure problem — which is precisely the hole the gate exists to close.

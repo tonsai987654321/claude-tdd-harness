@@ -80,12 +80,12 @@ def test_quality_stops_at_the_first_failure(repo: Path) -> None:
 
 
 def test_quality_expands_the_guarded_path(repo: Path) -> None:
-    """`{guarded}` is how `mypy --strict app/` stops being a hardcoded `app/`."""
+    """`{writable}` is how `mypy --strict app/` stops being a hardcoded `app/`."""
     write_config(repo, {
         "cmd": [sys.executable, "-c", "pass"],
         "red_exit_codes": [1],
         "writable_hint": "lib/",
-        "quality": [[sys.executable, "-c", "import sys; print('CHECKED', sys.argv[1])", "{guarded}"]],
+        "quality": [[sys.executable, "-c", "import sys; print('CHECKED', sys.argv[1])", "{writable}"]],
     })
     proc = run(repo, "quality", "widget")
     assert "CHECKED lib/" in proc.stdout
@@ -151,3 +151,59 @@ def test_projects_dir_is_honoured(repo: Path) -> None:
     proc = run(repo, "suite", "widget")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "CWD widget" in proc.stdout
+
+
+# ------------------------------------------------------------------ upgrading an older repo
+
+
+def test_a_config_predating_quality_still_works_for_a_shipped_runner(tmp_path: Path) -> None:
+    """The upgrade path, which is where this whole class of bug lives.
+
+    `.claude/harness.json` is repo-owned and a re-sync never rewrites it, so a repo installed
+    before `quality` existed receives a harness.py that requires a key its config cannot have. A
+    runner that shares a name with a shipped one inherits what it did not mention; without that,
+    `init.sh` failed on every project of every upgraded repo, exactly the shape of lesson 0005.
+    """
+    (tmp_path / ".claude" / "cycles").mkdir(parents=True)
+    (tmp_path / "projects" / "widget").mkdir(parents=True)
+    (tmp_path / ".claude" / "cycles" / "widget.json").write_text(
+        json.dumps({"project": "widget", "runner": "pytest", "cycles": []}), encoding="utf-8"
+    )
+    # A pre-0.3.0 config: a full runners block, written before `quality` was a key.
+    (tmp_path / ".claude" / "harness.json").write_text(json.dumps({
+        "projects_dir": "projects",
+        "runners": {"pytest": {"cmd": ["uv", "run", "pytest"], "red_exit_codes": [1, 2]}},
+    }), encoding="utf-8")
+
+    proc = run(tmp_path, "quality", "widget")
+    out = proc.stdout + proc.stderr
+    assert 'defines no "quality" commands' not in out
+    # It inherited the shipped pytest gates and tried to run them — which is what the repo was
+    # already running in the version it is upgrading from.
+    assert "ruff" in out
+
+
+def test_a_custom_runner_still_has_to_declare_its_own(repo: Path) -> None:
+    """The fallback fills gaps for runners the plugin ships. It cannot invent one for `madeup`,
+    and guessing there would be worse than the hard error."""
+    write_config(repo, {"cmd": [sys.executable, "-c", "pass"], "red_exit_codes": [1]})
+    proc = run(repo, "quality", "widget")
+    assert proc.returncode != 0
+
+
+def test_keys_the_user_named_still_win(repo: Path) -> None:
+    """Filling a gap must never soften a decision the config made explicitly."""
+    (repo / ".claude" / "cycles" / "widget.json").write_text(
+        json.dumps({"project": "widget", "runner": "pytest", "cycles": []}), encoding="utf-8"
+    )
+    (repo / ".claude" / "harness.json").write_text(json.dumps({
+        "projects_dir": "projects",
+        "runners": {"pytest": {
+            "cmd": [sys.executable, "-c", "pass"],
+            "red_exit_codes": [1],
+            "quality": [[sys.executable, "-c", "print('MINE RAN')"]],
+        }},
+    }), encoding="utf-8")
+    proc = run(repo, "quality", "widget")
+    assert "MINE RAN" in proc.stdout
+    assert "ruff" not in proc.stdout

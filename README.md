@@ -59,6 +59,8 @@ Run `/harness-init` again. The installer splits every file it writes into two se
 
 `.claude/settings.json` and `.gitignore` are **merged**, not replaced. `.claude/.harness-version` records which build last re-synced the repo — compare it with `/plugin list` to see whether a repo is carrying an old gate.
 
+A re-sync never rewrites `.claude/harness.json`, so a repo installed on an older version keeps a config that predates whatever keys have since been added. Shipped runners inherit the keys they do not mention, and the installer names every one it defaulted — see [lesson 0008](docs/lessons/0008-a-schema-that-grows-in-a-file-you-refuse-to-rewrite.md).
+
 The blanket `--force` is gone. It was the only way to update a vendored `harness.py`, and it took the constitution, the glossary and the cycle list with it — see [lesson 0005](docs/lessons/0005-vendored-code-needs-a-re-sync-path.md).
 
 ## How the gate works
@@ -111,7 +113,7 @@ A trailing `/` in `guarded` means "this directory and everything under it"; anyt
 
 `init.sh` generates its self-test probes from `guarded`, so widening the gate widens the check that proves it works.
 
-**Nothing outside this file names a tool.** `stack` is where the toolchain is declared and the agents read it from there; `quality` is the linter, formatter and type checker, run by `harness.py quality <project>`, with `{guarded}` expanding to `writable_hint`. `init.sh`, the implementer, the reviewer and the auditor all go through the harness, so a project on poetry, pyright, golangci-lint or cargo changes this file and nothing else. It did not used to be true — four places each named a stack and only one of them was the one the implementer obeyed, which is [lesson 0007](docs/lessons/0007-an-abstraction-that-stops-halfway-hides-where-it-stopped.md).
+**Nothing outside this file names a tool.** `stack` is where the toolchain is declared and the agents read it from there; `quality` is the linter, formatter and type checker, run by `harness.py quality <project>`, with `{writable}` expanding to `writable_hint`. `init.sh`, the implementer, the reviewer and the auditor all go through the harness, so a project on poetry, pyright, golangci-lint or cargo changes this file and nothing else. It did not used to be true — four places each named a stack and only one of them was the one the implementer obeyed, which is [lesson 0007](docs/lessons/0007-an-abstraction-that-stops-halfway-hides-where-it-stopped.md).
 
 ## Reference documents
 
@@ -126,7 +128,7 @@ The full text of an entry is opened only when its trigger matches the work in ha
 
 That leaves the index itself as the thing that grows, and the answer to that is retirement rather than shorter prose. When a lesson's failure mode has been made mechanically impossible — a gate probe, a test, a lint rule — it is marked `**Status:** mechanised` with the check named in `**Enforced by:**`, and it drops out of the index. **The check is the lesson now.** The prose stays as the reason the check exists, for whoever finds that check inconvenient later.
 
-Four of the seven lessons in this repo are already retired that way.
+Five of the eight lessons in this repo are already retired that way.
 
 ## What this does not prove
 

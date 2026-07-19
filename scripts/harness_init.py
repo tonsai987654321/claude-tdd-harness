@@ -210,6 +210,37 @@ def derive_requires(projects: list[Project]) -> list[str]:
     return requires
 
 
+# Keys the current template writes. A repo installed on an older version keeps its own
+# harness.json — that is the point of repo-owned — so a re-sync can deliver a harness.py whose
+# schema the config predates. harness.py fills gaps in a *known* runner from its own defaults, so
+# nothing breaks; this note exists because a silently-defaulted key is still a key the user never
+# chose, and they should know which decisions were made for them.
+CONFIG_KEYS = ("stack",)
+RUNNER_KEYS = ("quality",)
+
+
+def config_schema_note(root: Path) -> str:
+    path = root / ".claude" / "harness.json"
+    if not path.exists():
+        return ""
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return "!! .claude/harness.json is not valid JSON — every command is running on defaults."
+
+    missing = [k for k in CONFIG_KEYS if k not in cfg]
+    for name, spec in cfg.get("runners", {}).items():
+        missing += [f"runners.{name}.{k}" for k in RUNNER_KEYS if k not in spec]
+    if not missing:
+        return ""
+    return (
+        f"!! .claude/harness.json predates this version: no {', '.join(missing)}. "
+        "Shipped runners fall back to the plugin's defaults, so nothing is broken — but see "
+        "templates/harness.json.tmpl for what is now configurable, or --reset .claude/harness.json "
+        "to take the new file (it overwrites your owner, guarded paths and runner edits)."
+    )
+
+
 def merge_settings(root: Path, interpreter: str) -> str:
     """Add the harness hooks to .claude/settings.json without disturbing what is there.
 
@@ -441,6 +472,7 @@ def main(argv: list[str] | None = None) -> int:
     install_lessons(writer)
 
     # ------------------------------------------------------------------------ merged, not owned
+    config_note = config_schema_note(root)
     settings_note = merge_settings(root, interpreter)
     gitignore_note = append_gitignore(root)
 
@@ -452,6 +484,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ~~ {rel}  (re-synced from the plugin)")
     print(f"  {settings_note}")
     print(f"  {gitignore_note}")
+    if config_note:
+        print(f"  {config_note}")
     if writer.kept:
         print("\n  Yours, left untouched (use --reset <path> to overwrite one):")
         for rel in writer.kept:

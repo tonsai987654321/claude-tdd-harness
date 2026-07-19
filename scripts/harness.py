@@ -78,14 +78,14 @@ DEFAULT_CONFIG: dict = {
             "coverage_re": r"^TOTAL\s+.*?(\d+)%",
             "coverage_multiline": True,
             "writable_hint": "app/",
-            # The quality gates, as argv lists run in the project directory. `{guarded}` expands
+            # The quality gates, as argv lists run in the project directory. `{writable}` expands
             # to writable_hint. These live in the config for the same reason the test command
             # does: a repo on poetry, pylint or pyright is not a different harness, it is a
             # different four lines. Naming them in an agent prompt made them unreachable.
             "quality": [
                 ["uv", "run", "ruff", "check", "."],
                 ["uv", "run", "ruff", "format", "--check", "."],
-                ["uv", "run", "mypy", "--strict", "{guarded}"],
+                ["uv", "run", "mypy", "--strict", "{writable}"],
             ],
         },
         "vitest": {
@@ -155,6 +155,17 @@ def runner_spec(project: str) -> dict:
         spec = cfg["runners"][name]
     except KeyError:
         sys.exit(f"harness: project '{project}' declares runner '{name}', which .claude/harness.json does not define.")
+
+    # A runner that shares a name with a shipped one inherits the keys it did not mention. This is
+    # the one place the "naming a key replaces it outright" rule is relaxed, and the reason is a
+    # schema that grows: `quality` was added in 0.3.0, but `.claude/harness.json` is repo-owned and
+    # is deliberately never rewritten by a re-sync. Without this, upgrading a repo installed on an
+    # earlier version delivered a new harness.py that demanded a key the repo's config could not
+    # have had, and `init.sh` failed on every project. Keys the user did name still win outright —
+    # this can only fill a gap, never soften a decision they made.
+    default = DEFAULT_CONFIG["runners"].get(name)
+    if default:
+        spec = {**default, **spec}
 
     # Fail on the config, not with a traceback three frames into cmd_red. A half-written runner
     # is a likely thing to hand-edit into harness.json, and the message has to say which key.
@@ -345,7 +356,7 @@ def cmd_quality(project: str) -> None:
 
     guarded = spec.get("writable_hint", ".")
     for raw in commands:
-        cmd = [str(part).replace("{guarded}", guarded) for part in raw]
+        cmd = [str(part).replace("{writable}", guarded) for part in raw]
         printable = " ".join(cmd)
         print(f"--- {printable}")
         resolved = list(cmd)
