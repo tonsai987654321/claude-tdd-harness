@@ -5,7 +5,7 @@ Prints, on one line, the next thing to do across all projects in build order:
   BUILD <project> <cycle-id> <title>      a cycle to run
   DONE                                     every cycle of every project is done+evidenced
 
-Used by the `/continue` command and by the auto-resume wakeup so a fresh session — or a
+Used by the `/harness-continue` command and by the auto-resume wakeup so a fresh session — or a
 session resuming after a usage-limit reset — knows exactly where to pick up without reading
 chat history.
 """

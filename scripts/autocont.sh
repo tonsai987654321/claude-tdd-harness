@@ -5,7 +5,7 @@
 #   autocont.sh off                # disarm: remove the flag
 #   autocont.sh status             # exit 0 if armed & unexpired, else 1
 #
-# The flag holds an absolute expiry epoch, refreshed each /continue turn. If the
+# The flag holds an absolute expiry epoch, refreshed each /harness-continue turn. If the
 # session dies mid-loop the flag simply expires (self-healing) rather than showing
 # a stale TRUE forever. The launchd durable job is a separate signal the statusline
 # ORs in; this covers only the transient in-session loop.

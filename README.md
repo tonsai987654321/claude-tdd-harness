@@ -128,7 +128,7 @@ The full text of an entry is opened only when its trigger matches the work in ha
 
 That leaves the index itself as the thing that grows, and the answer to that is retirement rather than shorter prose. When a lesson's failure mode has been made mechanically impossible — a gate probe, a test, a lint rule — it is marked `**Status:** mechanised` with the check named in `**Enforced by:**`, and it drops out of the index. **The check is the lesson now.** The prose stays as the reason the check exists, for whoever finds that check inconvenient later.
 
-Six of the nine lessons in this repo are already retired that way.
+Eight of the eleven lessons in this repo are already retired that way.
 
 ## What this does not prove
 

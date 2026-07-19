@@ -52,6 +52,11 @@ projects_dir="projects"
 PROJECTS=()
 _line_no=0
 while IFS= read -r line; do
+  # Strip a trailing CR. Python's print() writes \r\n on Windows, and unlike `$(...)` — which
+  # eats the pair — `read` hands back the \r. Every value here then carries one: `projects\r`
+  # never matches a directory, so every project reported MISSING, and `gh repo clone alice\r/api\r`
+  # could not have worked either. This script had never been run on Windows; see docs/lessons/0001.
+  line="${line%$'\r'}"
   case "$_line_no" in
     0) OWNER="$line" ;;
     1) projects_dir="$line" ;;
@@ -86,6 +91,11 @@ for name in "${PROJECTS[@]}"; do
     fi
     echo ">> $name: present on '$branch' — pulling…"
     git -C "$dir" pull --ff-only 2>&1 | sed 's/^/   /' || echo "   (pull skipped — diverged or offline; leaving as-is)"
+  elif [ -d "$dir" ]; then
+    # Present but with no checkout in it. Reporting this as MISSING sent the user into
+    # `gh repo clone` against a non-empty directory, which fails — and the useful question is how
+    # a project directory came to exist without a repo inside it, not how to clone harder.
+    printf '%-26s PRESENT but no git checkout — inspect or remove %s, then re-run\n' "$name" "$dir"
   else
     if [ "$status_only" = 1 ]; then
       printf '%-26s MISSING (run without --status to clone)\n' "$name"

@@ -71,7 +71,7 @@ NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
 # Tests that drive the installer rather than the gate. They stay in the plugin: the installer is
 # deliberately not vendored, so a copy of its suite in a scaffolded repo tests a file that is not
 # there and reports the harness red. Which is exactly what it did, once.
-NOT_VENDORED = {"test_install.py"}
+NOT_VENDORED = {"test_install.py", "test_plugin_surface.py"}
 
 # Copied into the target's .claude/scripts/. The harness must keep working in a fresh clone with
 # the plugin uninstalled — a portfolio repo is read by people who do not have your plugins.

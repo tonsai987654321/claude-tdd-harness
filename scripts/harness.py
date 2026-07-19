@@ -307,7 +307,7 @@ def cmd_gate() -> None:
         f"BLOCKED by TDD gate: {rel}\n"
         f"  Gate for '{project}' is SHUT. No failing test is on record.\n"
         f"  Write the test first, then open the gate:\n"
-        f"      /red {project} <test-path>\n"
+        f"      python3 .claude/scripts/harness.py red {project} <test-path>\n"
         f"  Tests, __init__.py, config and CI files are never blocked."
     )
 
@@ -461,8 +461,8 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
         sys.exit(
             f"REFUSED: cycle {cycle_id} cannot be 'done' without evidence.\n"
             f"  Pass what actually ran and what it printed:\n"
-            f'      harness.py cycle {project} {cycle_id} done --evidence "pytest 24 passed, cov 93%; '
-            f'ruff clean; mypy clean; a1b2c3d [RED] -> e4f5g6h [GREEN]"'
+            f'      harness.py cycle {project} {cycle_id} done --evidence "<runner> 24 passed, '
+            f'cov 93%; quality gates clean; a1b2c3d [RED] -> e4f5g6h [GREEN]"'
         )
 
     state = load_state(project)
@@ -685,7 +685,7 @@ def cmd_handoff() -> None:
 
         if pending and not next_action and not blocked:
             c = pending[0]
-            next_action = f"`/build {project}` — cycle {c['id']}: {c['title']}"
+            next_action = f"`/harness-build {project}` — cycle {c['id']}: {c['title']}"
 
     # A blocked board has no next action, but it is not a finished one. Saying so unconditionally
     # declares completion directly above the blockers it just listed, and contradicts

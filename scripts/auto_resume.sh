@@ -6,7 +6,7 @@
 # runs from launchd (outside any Claude session) on a fixed tick. Each tick:
 #   - if all cycles are done -> exit quietly (self-disables the useful work)
 #   - if a resume is already in flight -> skip (lock)
-#   - else launch a headless `claude -p "/continue"` in the worktree
+#   - else launch a headless `claude -p "/harness-continue"` in the worktree
 #     If quota is still exhausted, that headless run exits fast with a limit
 #     error and we simply retry next tick — cheap polling until the window resets.
 #
@@ -48,7 +48,7 @@ echo "$(date '+%F %T') resuming: $NEXT" >>"$LOG"
 # Headless resume. --continue reuses the latest session in this dir if present.
 # If the usage window is still closed, this exits quickly; the lock is released
 # and the next launchd tick retries.
-"$CLAUDE_BIN" -p "/continue" >>"$LOG" 2>&1 \
+"$CLAUDE_BIN" -p "/harness-continue" >>"$LOG" 2>&1 \
   || echo "$(date '+%F %T') claude exited non-zero (likely quota still out) — will retry next tick" >>"$LOG"
 
 echo "$(date '+%F %T') resume attempt finished" >>"$LOG"
