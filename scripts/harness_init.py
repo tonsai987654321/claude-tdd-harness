@@ -317,13 +317,31 @@ def merge_settings(root: Path, interpreter: str) -> str:
 
 
 def append_gitignore(root: Path) -> str:
+    """Append the harness block, or top it up if it predates some of its entries.
+
+    Skipping wholesale because the marker is present was the same mistake as never rewriting
+    harness.json: this block has a schema that grows. A repo scaffolded before `__pycache__/` was
+    added kept a block that no longer covered what `init.sh` creates, and nothing said so.
+    """
     path = root / ".gitignore"
     block = (TEMPLATES / "gitignore.append").read_text(encoding="utf-8")
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    if "--- TDD harness ---" in existing:
+
+    if "--- TDD harness ---" not in existing:
+        path.write_text(existing + block, encoding="utf-8", newline="\n")
+        return "++ .gitignore (harness block appended)"
+
+    have = {line.strip() for line in existing.splitlines()}
+    missing = [
+        line.strip() for line in block.splitlines()
+        if line.strip() and not line.lstrip().startswith("#") and line.strip() not in have
+    ]
+    if not missing:
         return "== .gitignore already carries the harness block"
-    path.write_text(existing + block, encoding="utf-8", newline="\n")
-    return "++ .gitignore (harness block appended)"
+
+    addition = "\n# --- TDD harness (added by a later version) ---\n" + "\n".join(missing) + "\n"
+    path.write_text(existing.rstrip("\n") + "\n" + addition, encoding="utf-8", newline="\n")
+    return f"++ .gitignore (topped up: {', '.join(missing)})"
 
 
 def cycle_stub(project: Project, order: int) -> str:

@@ -135,6 +135,26 @@ def test_init_sh_leaves_nothing_untracked(repo: Path) -> None:
     assert "pytest_cache" not in untracked, untracked
 
 
+def test_a_gitignore_block_from_an_older_version_is_topped_up(repo: Path) -> None:
+    """The block has a schema that grows, and 'the marker is already there' skipped the whole
+    thing — so a repo scaffolded before __pycache__/ was added kept a block that no longer
+    covered what init.sh creates. Same mistake as never rewriting harness.json (lesson 0008)."""
+    gitignore = repo / ".gitignore"
+    old_block = "\n# --- TDD harness ---\n.claude/state/\nprojects/\n"
+    gitignore.write_text("node_modules\n" + old_block, encoding="utf-8")
+
+    install(repo)
+
+    text = gitignore.read_text(encoding="utf-8")
+    assert "__pycache__/" in text
+    assert "node_modules" in text, "the user's own rules must survive"
+    assert text.count("--- TDD harness ---") == 1, "the original block must not be duplicated"
+
+    # And topping up must not repeat itself on the next run.
+    install(repo)
+    assert gitignore.read_text(encoding="utf-8").count("__pycache__/") == 1
+
+
 def test_scaffolder_is_not_vendored(repo: Path) -> None:
     """It resolves templates relative to __file__ and dies from .claude/scripts/. Lesson 0003."""
     assert not (repo / ".claude" / "scripts" / "harness_init.py").exists()
