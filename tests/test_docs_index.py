@@ -68,12 +68,16 @@ def test_superseded_adrs_leave_the_index(tmp_path: Path) -> None:
     # Both field styles appear in the shipped ADRs. A parser that read only one would silently
     # hide half the corpus from the index that is supposed to surface it.
     (d / "0001-kept.md").write_text("# ADR-0001: the standing decision\n\n- **Status:** accepted\n", encoding="utf-8")
-    (d / "0002-gone.md").write_text("# ADR-0002: the replaced one\n\n**Status:** superseded by ADR-0003\n", encoding="utf-8")
+    (d / "0002-gone.md").write_text("# ADR-0002 — the replaced one\n\n**Status:** superseded by ADR-0003\n", encoding="utf-8")
 
     out = run(tmp_path, "adrs")
     assert "the standing decision" in out
     assert "the replaced one" not in out
     assert "1 accepted, 1 superseded" in out
+    # The number is already the index's first column. Repeating it costs the width the title
+    # needs, and the first stripper only understood a colon — so ADR-0009, written with an em
+    # dash, rendered as "ADR-0009 — One gate, many runners".
+    assert "ADR-0001" not in out
 
 
 def test_an_empty_archive_says_where_to_start(tmp_path: Path) -> None:

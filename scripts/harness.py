@@ -780,7 +780,7 @@ def doc_title(text: str, fallback: str) -> str:
         if line.startswith("# "):
             # The number is already the first column of the index; repeating it in the title
             # costs width that the trigger line needs more.
-            return re.sub(r"^(?:Lesson|ADR)[- ]\d+:\s*", "", line[2:].strip())
+            return re.sub(r"^(?:Lesson|ADR)[- ]?\d+\s*[:—-]\s*", "", line[2:].strip())
     return fallback
 
 
