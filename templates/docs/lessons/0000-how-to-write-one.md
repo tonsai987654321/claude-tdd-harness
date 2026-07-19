@@ -39,7 +39,7 @@ lint rule, a CI check — it stops being a lesson. Mark it:
 
 ```markdown
 **Status:** mechanised
-**Enforced by:** tests/test_gate.py::test_gate_blocks_app_while_shut
+**Enforced by:** .claude/harness-tests/test_gate.py::test_gate_blocks_the_migration_runner
 ```
 
 It drops out of the index and stops competing for attention, because the check is now the lesson.

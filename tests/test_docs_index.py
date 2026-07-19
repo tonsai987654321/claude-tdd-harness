@@ -79,3 +79,51 @@ def test_superseded_adrs_leave_the_index(tmp_path: Path) -> None:
 def test_an_empty_archive_says_where_to_start(tmp_path: Path) -> None:
     assert "0000-how-to-write-one" in run(tmp_path, "lessons")
     assert "0000-template" in run(tmp_path, "adrs")
+
+
+def test_every_mechanised_lesson_points_at_a_test_that_exists() -> None:
+    """A retired lesson claims a check replaced it. If that check is not there, the lesson has
+    been removed from the index on the strength of a promise.
+
+    This is the plugin's own cardinal failure — "documentation that lies", named in CLAUDE.md —
+    aimed at the mechanism that retires documentation. It caught a real one on its first run: the
+    how-to-write-one guide demonstrated the format with `test_gate_blocks_app_while_shut`, a test
+    that has never existed, and shipped that example into every scaffolded repo.
+
+    Resolved by reading the file rather than by collecting with pytest, so it works the same in a
+    scaffolded repo, where the tests live under .claude/harness-tests/ and the harness is not
+    installed as a package.
+    """
+    import re
+
+    # This file runs from two places: tests/ in the plugin, and .claude/harness-tests/ in a
+    # scaffolded repo. Walk up to whichever holds docs/lessons/ rather than counting parents —
+    # the first version counted, counted wrong, and failed in the scaffolded repo only.
+    here = Path(__file__).resolve()
+    root = next((p for p in here.parents if (p / "docs" / "lessons").is_dir()), None)
+    assert root, f"no docs/lessons/ above {here} — the archive should at least carry the guide"
+    lessons = sorted((root / "docs" / "lessons").glob("*.md"))
+    assert lessons, "no lessons to check — the archive should at least carry the guide"
+
+    broken = []
+    for path in lessons:
+        line = next(
+            (l for l in path.read_text(encoding="utf-8").splitlines() if "**Enforced by:**" in l),
+            None,
+        )
+        if not line:
+            continue
+        # The reference is what precedes the em dash; everything after it is prose, and prose
+        # names commands like `harness.py quality` that are not files to resolve.
+        reference = line.split("**Enforced by:**", 1)[1].split("—", 1)[0]
+        refs = re.findall(r"`?([\w/.-]+\.py)(?:::(\w+))?`?", reference)
+        assert refs, f"{path.name}: Enforced by names no file"
+        for filename, testname in refs:
+            target = root / filename
+            if not target.is_file():
+                broken.append(f"{path.name} -> {filename} (no such file)")
+                continue
+            if testname and f"def {testname}" not in target.read_text(encoding="utf-8"):
+                broken.append(f"{path.name} -> {filename}::{testname} (no such test)")
+
+    assert not broken, "mechanised lessons whose enforcing check does not exist: " + "; ".join(broken)
