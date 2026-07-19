@@ -239,6 +239,39 @@ def test_project_spec_is_validated_at_install_time(spec: str, because: str) -> N
     assert exc.type.__name__ == "ArgumentTypeError", because
 
 
+def test_a_runner_the_repo_added_itself_can_be_scaffolded(repo: Path) -> None:
+    """PLAYBOOK has always said a new runner is a config entry and nothing else.
+
+    The installer disagreed: it validated against a tuple hardcoded in its own source, so a repo
+    that had added `gotest` to .claude/harness.json still could not scaffold a project with it —
+    and the error told the user to do the thing they had already done. Same shape as lesson 0007:
+    validation that hardcodes what the config was supposed to own.
+    """
+    config = repo / ".claude" / "harness.json"
+    cfg = json.loads(config.read_text(encoding="utf-8"))
+    cfg["runners"]["gotest"] = {
+        "cmd": ["go", "test", "./..."], "red_exit_codes": [1],
+        "writable_hint": "internal/", "quality": [["go", "vet", "./..."]],
+    }
+    config.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+    install(repo, "--project", "svc:gotest:80")
+
+    cycle = json.loads((repo / ".claude" / "cycles" / "svc.json").read_text(encoding="utf-8"))
+    assert cycle["runner"] == "gotest"
+
+
+def test_a_runner_nothing_defines_is_still_refused(repo: Path) -> None:
+    """The validation is not gone, it just reads the right list. A typo must still be caught at
+    install time rather than at the first `red`, one session later."""
+    proc = subprocess.run(
+        [sys.executable, str(INSTALLER), "--target", str(repo), "--project", "svc:pytst:80"],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+    assert proc.returncode != 0
+    assert "pytst" in proc.stderr
+
+
 def test_valid_specs_still_parse() -> None:
     assert harness_init.Project.parse("api") == harness_init.Project("api", "pytest", 90)
     assert harness_init.Project.parse("web:vitest:80") == harness_init.Project("web", "vitest", 80)

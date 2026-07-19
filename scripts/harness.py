@@ -30,11 +30,15 @@ import sys
 import time
 from pathlib import Path
 
-# The dashboard draws with non-ASCII glyphs. A Windows console inherits a legacy codepage
-# (cp874 here), and printing one of them raises UnicodeEncodeError — the whole command dies
-# over a separator dot. POSIX stdout is already UTF-8, so this is a no-op there.
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+# stdout AND stderr. stderr is not an afterthought here: it is the PreToolUse contract — `deny()`
+# writes the block reason there and exits 2 — and it carries every error message this script has.
+# A Windows console inherits a legacy codepage (cp874 here); a path or a message with one character
+# outside it raises UnicodeEncodeError, the process dies with a code that is not 2, and a write
+# that should have been refused is not. The gate failing OPEN over a filename is the worst outcome
+# this file has. POSIX is already UTF-8, so this is a no-op there.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
 
 ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
 STATE_DIR = ROOT / ".claude" / "state"

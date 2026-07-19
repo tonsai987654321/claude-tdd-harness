@@ -34,17 +34,38 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+# Both streams. Every error this script reports goes to stderr, and on a Windows console that is
+# a legacy codepage — an em-dash in a message about an unknown runner raised UnicodeEncodeError
+# instead of printing it, and anything reading the stream as UTF-8 got nothing at all.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = PLUGIN_ROOT / "templates"
 
 VERSION_FILE = ".claude/.harness-version"
 
-# The runners with a definition in harness.json.tmpl. A project scaffolded against a name that is
-# not here produces a cycle file that is fatal at the first `red`, one whole session later.
-KNOWN_RUNNERS = ("pytest", "vitest")
+# The runners the shipped template defines. A project scaffolded against a name nothing defines
+# produces a cycle file that is fatal at the first `red`, one whole session later — but the set is
+# not fixed: a repo that has added `gotest` to its own .claude/harness.json can scaffold against
+# it, which is what docs/PLAYBOOK.md has always said and what this used to refuse.
+TEMPLATE_RUNNERS = ("pytest", "vitest")
+
+
+def known_runners(root: Path) -> tuple[str, ...]:
+    """Runner names this target will actually be able to run.
+
+    Read from the target's own config when it has one, because that is the file `harness.py`
+    resolves against; fall back to the template's set for a fresh install, where the config does
+    not exist yet and the template is what is about to be written.
+    """
+    config = root / ".claude" / "harness.json"
+    try:
+        names = tuple(json.loads(config.read_text(encoding="utf-8"))["runners"])
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        return TEMPLATE_RUNNERS
+    return names or TEMPLATE_RUNNERS
 NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 # Tests that drive the installer rather than the gate. They stay in the plugin: the installer is
@@ -114,7 +135,7 @@ class Project:
     coverage: int
 
     @classmethod
-    def parse(cls, spec: str) -> Project:
+    def parse(cls, spec: str, runners: tuple[str, ...] = TEMPLATE_RUNNERS) -> Project:
         """`name`, `name:runner`, or `name:runner:coverage`.
 
         Every field is validated here rather than at first use. A bad runner or an unreachable
@@ -129,11 +150,11 @@ class Project:
                 "dash or underscore"
             )
         runner = parts[1] if len(parts) > 1 and parts[1] else "pytest"
-        if runner not in KNOWN_RUNNERS:
+        if runner not in runners:
             raise argparse.ArgumentTypeError(
-                f"project spec {spec!r}: unknown runner {runner!r}. Known: "
-                f"{', '.join(KNOWN_RUNNERS)}. Anything else needs a runner definition in "
-                ".claude/harness.json first — see 'Adding a runner' in docs/PLAYBOOK.md."
+                f"project spec {spec!r}: unknown runner {runner!r}. This repo defines: "
+                f"{', '.join(runners)}. Add a definition for {runner!r} to .claude/harness.json and "
+                "run this again — see 'Adding a runner' in docs/PLAYBOOK.md."
             )
         try:
             coverage = int(parts[2]) if len(parts) > 2 and parts[2] else 90
@@ -351,8 +372,9 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         metavar="NAME[:RUNNER[:COVERAGE]]",
-        help=f"a project to build; repeatable. Runner is one of {', '.join(KNOWN_RUNNERS)} "
-        "(default pytest), coverage 0-100 (default 90).",
+        help="a project to build; repeatable. Runner is any name defined in the target's "
+        f".claude/harness.json, or one of {', '.join(TEMPLATE_RUNNERS)} on a fresh install "
+        "(default pytest); coverage 0-100 (default 90).",
     )
     ap.add_argument("--purpose", default="", help="one paragraph: what these projects are for")
     ap.add_argument(
@@ -377,7 +399,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        projects = [Project.parse(s) for s in args.project]
+        runners = known_runners(root)
+        projects = [Project.parse(s, runners) for s in args.project]
     except argparse.ArgumentTypeError as exc:
         print(f"harness-init: {exc}", file=sys.stderr)
         return 1

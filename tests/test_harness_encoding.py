@@ -246,3 +246,42 @@ def test_status_reads_a_transcript_holding_non_ascii(harness_root: Path) -> None
     # tokens are attributed to it.
     assert f"tdd-implementer: {agent_task}" in board, board
     assert "1.5k" in board, board
+
+
+def test_stderr_is_utf8_so_the_gate_cannot_die_reporting_a_block(tmp_path):
+    """`deny()` writes the block reason to stderr and exits 2 — that is the PreToolUse contract.
+
+    On a Windows console stderr inherits a legacy codepage. A guarded path with one character
+    outside it raised UnicodeEncodeError, the process exited with something other than 2, and the
+    write it was refusing went through. A gate that fails open over a filename is worse than no
+    gate, because it looks like one.
+    """
+    import json
+    import os
+    import pathlib
+    import subprocess
+    import sys
+
+    root = tmp_path
+    (root / ".claude" / "cycles").mkdir(parents=True)
+    # The gate finds its root by walking up to .claude/scripts/harness.py, so the fixture has to
+    # look like a scaffolded repo rather than merely have a .claude directory.
+    (root / ".claude" / "scripts").mkdir()
+    harness_src = pathlib.Path(__file__).resolve().parents[1] / "scripts" / "harness.py"
+    (root / ".claude" / "scripts" / "harness.py").write_text(
+        harness_src.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    guarded = root / "projects" / "api" / "app"
+    guarded.mkdir(parents=True)
+    target = guarded / "ราคา.py"
+
+    proc = subprocess.run(
+        [sys.executable, str(root / ".claude" / "scripts" / "harness.py"), "gate"],
+        input=json.dumps({"tool_input": {"file_path": str(target)}}),
+        capture_output=True, text=True, encoding="utf-8",
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(root)},
+    )
+
+    assert proc.returncode == 2, f"gate did not refuse; exit {proc.returncode}, stderr {proc.stderr!r}"
+    assert "BLOCKED" in proc.stderr
+    assert "ราคา.py" in proc.stderr
