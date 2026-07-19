@@ -13,3 +13,10 @@ HANDOFF.md
 
 # A local bundle can carry .env credentials into a commit.
 *.zip
+
+# Byte-cache and cache dirs the harness itself creates: `init.sh` runs the vendored suite under
+# .claude/, so these appear on the first verification run of a repo that may contain no Python of
+# its own. A reviewer reading this repo should not be reading a committed __pycache__.
+__pycache__/
+*.pyc
+.pytest_cache/

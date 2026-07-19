@@ -285,3 +285,41 @@ def test_stderr_is_utf8_so_the_gate_cannot_die_reporting_a_block(tmp_path):
     assert proc.returncode == 2, f"gate did not refuse; exit {proc.returncode}, stderr {proc.stderr!r}"
     assert "BLOCKED" in proc.stderr
     assert "ราคา.py" in proc.stderr
+
+
+def test_every_shipped_script_pins_both_streams_and_every_file_read():
+    """Enumerate the class, not the instance that crashed.
+
+    The stdout fix was made three times before this check existed, and each time it covered the
+    file where the crash had been seen: harness.py, then harness_init.py, then — after two more
+    scripts turned out to have the same gap — next_cycle.py and usage_guard.py. usage_guard.py
+    also read its snapshot with a bare `read_text()`, which is the very thing this file exists to
+    prevent, in a script nothing else in the suite touched.
+    """
+    import ast
+    import pathlib
+
+    scripts = sorted((pathlib.Path(__file__).resolve().parents[1] / "scripts").glob("*.py"))
+    assert scripts
+
+    # Parsed, not grepped: a regex for the closing paren stops inside `json.dumps(...)` and
+    # reports a correctly-encoded write as a bug. A check that cries wolf gets deleted.
+    ENCODED = {"read_text", "write_text", "open"}
+    unguarded, unencoded = [], []
+    for path in scripts:
+        src = path.read_text(encoding="utf-8")
+        if "sys.stderr" not in src or "reconfigure" not in src:
+            unguarded.append(path.name)
+        for node in ast.walk(ast.parse(src)):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            if node.func.attr not in ENCODED:
+                continue
+            names = {kw.arg for kw in node.keywords}
+            # `**DECODE` (arg is None) is the module's own utf-8 kwargs bundle.
+            if "encoding" in names or None in names:
+                continue
+            unencoded.append(f"{path.name}:{node.lineno} .{node.func.attr}()")
+
+    assert not unguarded, f"scripts that do not pin stdout AND stderr to UTF-8: {unguarded}"
+    assert not unencoded, f"reads/writes that fall back to the locale codec: {unencoded}"

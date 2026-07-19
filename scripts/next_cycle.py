@@ -17,11 +17,12 @@ import os
 import sys
 from pathlib import Path
 
-# Cycle titles carry Thai and an em dash, and harness.py writes the state as UTF-8. Windows gives a
-# piped stdout the locale codec (cp874 here), which cannot encode either. POSIX stdout is already
-# UTF-8, so this is a no-op there. Same guard as harness.py.
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+# Both streams, always. Windows gives this process the console codepage; an em dash in a message
+# or a Thai cycle title then raises UnicodeEncodeError and the command dies reporting something.
+# POSIX is already UTF-8, so this is a no-op there. See docs/lessons/0009.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8")
 
 ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR") or Path(__file__).resolve().parents[2])
 CYCLE_DIR = ROOT / ".claude" / "cycles"

@@ -115,6 +115,26 @@ def test_vendored_shell_scripts_are_lf(repo: Path) -> None:
         assert b"\r\n" not in path.read_bytes(), f"{path.name} was vendored with CRLF"
 
 
+def test_init_sh_leaves_nothing_untracked(repo: Path) -> None:
+    """`init.sh` runs the vendored suite, which writes __pycache__ and .pytest_cache into the
+    user's repo — a repo that may contain no Python of its own. These are portfolio repos read by
+    reviewers; a committed byte-cache is noticed. Asked of git rather than asserted against a
+    string, so the check is about the effect and not about the wording of the block."""
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)
+    for junk in ("__pycache__/x.pyc", ".pytest_cache/v/cache/lastfailed",
+                 ".claude/harness-tests/__pycache__/y.pyc"):
+        path = repo / junk
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+
+    untracked = subprocess.run(
+        ["git", "status", "--porcelain", "--ignored=no"],
+        cwd=repo, capture_output=True, text=True, check=True,
+    ).stdout
+    assert "pycache" not in untracked, untracked
+    assert "pytest_cache" not in untracked, untracked
+
+
 def test_scaffolder_is_not_vendored(repo: Path) -> None:
     """It resolves templates relative to __file__ and dies from .claude/scripts/. Lesson 0003."""
     assert not (repo / ".claude" / "scripts" / "harness_init.py").exists()

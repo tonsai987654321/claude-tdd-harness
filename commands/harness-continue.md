@@ -16,6 +16,8 @@ You are running the build **continuously**. Do not stop between cycles for appro
 
 0. **Check the usage brake first.** Before starting any cycle, read the live 5-hour usage from the statusline snapshot:
 
+   > The snapshot is `~/.claude/state/usage.json`, and **the harness does not create it** — the rate-limit figures exist only in the statusline command's stdin, so a statusline that tees them there is a prerequisite the user configures once, outside this plugin. Without it the guard returns exit 2 forever and the loop runs unbraked on the reactive path alone. Say so rather than treating a permanent `unknown` as normal.
+
    ```bash
    python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/usage_guard.py"    # exit 0 go · 10 brake · 2 unknown
    ```
