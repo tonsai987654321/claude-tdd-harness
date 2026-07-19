@@ -5,6 +5,11 @@
 # This governs the working copy on the *installing* machine, which is the copy shutil.copy2
 # hands to the target. It does not retroactively fix blobs already committed with CRLF —
 # that took one `git add --renormalize .`.
+#
+# The catch-all comes first so nothing depends on remembering to add an extension here; the
+# explicit lines below are the ones that would actually break, and they are listed because a
+# reader should be able to see why this file exists without reconstructing it.
+*       text=auto eol=lf
 *.sh    text eol=lf
 *.tmpl  text eol=lf
 *.py    text eol=lf
