@@ -8,8 +8,8 @@ The rule it enforces is one line — *no production code without a failing test 
 
 | | |
 |---|---|
-| `.claude/scripts/harness.py` | the gate hook, `red`/`green`, cycle tracking, coverage, token accounting, handoff |
-| `.claude/harness.json` | the only project-specific config: owner, guarded paths, runner definitions |
+| `.claude/scripts/harness.py` | the gate hook, `red`/`green`/`quality`/`suite`, cycle tracking, coverage, token accounting, handoff |
+| `.claude/harness.json` | the only project-specific config: owner, stack, guarded paths, runner and quality-gate definitions |
 | `.claude/cycles/<p>.json` | the ordered TDD cycles per project, with each project's runner and coverage gate |
 | `init.sh` | one command that proves the gate still blocks, then runs every scaffolded suite |
 | `.claude/.harness-version` | which build of the plugin last re-synced this repo |
@@ -134,7 +134,7 @@ That leaves the index itself as the thing that grows, and the answer to that is 
 
 The gate proves **ordering**: a test existed and failed before the code did. It does not prove the test is any good. An `ImportError` counts as RED, and a test that asserts nothing passes the gate exactly like a test that asserts everything.
 
-That gap is why the harness ships a reviewer agent and an evidence rule, and why `harness.py cycle <p> <id> done` refuses without evidence — what ran, what it printed, and the two commit SHAs. A completion nobody can check is indistinguishable from a lie.
+That gap is why the harness ships a reviewer agent and an evidence rule, and why `harness.py cycle <p> <id> done` refuses without evidence — what ran, what it printed, and the two commit SHAs. A completion nobody can check is indistinguishable from a lie. It refuses below the project's `coverage_gate` too, and `init.sh` fails on any `done` cycle that predates that check.
 
 Neither mechanism is sufficient alone. A repo that trusts only the gate has automated the appearance of the discipline.
 

@@ -207,3 +207,49 @@ def test_keys_the_user_named_still_win(repo: Path) -> None:
     proc = run(repo, "quality", "widget")
     assert "MINE RAN" in proc.stdout
     assert "ruff" not in proc.stdout
+
+
+# ------------------------------------------------------------------ the coverage gate
+
+
+def cycle_repo(tmp_path: Path, gate: int, coverage: int | None) -> Path:
+    (tmp_path / ".claude" / "cycles").mkdir(parents=True)
+    (tmp_path / ".claude" / "state").mkdir()
+    (tmp_path / ".claude" / "cycles" / "widget.json").write_text(json.dumps({
+        "project": "widget", "runner": "pytest", "coverage_gate": gate,
+        "cycles": [{"id": 1, "title": "a behaviour"}],
+    }), encoding="utf-8")
+    (tmp_path / ".claude" / "state" / "widget.json").write_text(json.dumps({
+        "project": "widget", "gate": {"state": "SHUT"}, "coverage": coverage,
+        "cycles": [{"id": 1, "title": "a behaviour", "state": "green", "agent": "-",
+                    "tokens": 0, "evidence": ""}],
+    }), encoding="utf-8")
+    return tmp_path
+
+
+def close(root: Path):
+    return run(root, "cycle", "widget", "1", "done", "--evidence", "suite green; aaa -> bbb")
+
+
+def test_a_cycle_under_the_coverage_gate_cannot_be_closed(tmp_path: Path) -> None:
+    """`coverage_gate` was in every cycle file, validated at install, quoted in the PLAYBOOK's
+    definition of done — and read by nothing that could refuse. A number only an agent checks is
+    the thing this harness exists to argue against."""
+    proc = close(cycle_repo(tmp_path, gate=90, coverage=71))
+    assert proc.returncode != 0
+    assert "71" in proc.stdout + proc.stderr
+    assert "90" in proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize("coverage", [90, 97])
+def test_a_cycle_at_or_above_the_gate_closes(tmp_path: Path, coverage: int) -> None:
+    """Exactly at the gate counts as meeting it; each case gets its own tmp_path because
+    cycle_repo builds a repo from scratch."""
+    assert close(cycle_repo(tmp_path, gate=90, coverage=coverage)).returncode == 0
+
+
+def test_coverage_that_was_never_measured_does_not_block(tmp_path: Path) -> None:
+    """Cycle 0 is scaffolding and runs no suite. Refusing there would make the gate a rule about
+    when you are allowed to have measured something, which is not what it is for — and the
+    evidence rule already stands between an unmeasured cycle and a silent `done`."""
+    assert close(cycle_repo(tmp_path, gate=90, coverage=None)).returncode == 0

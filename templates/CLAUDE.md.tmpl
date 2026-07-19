@@ -39,7 +39,7 @@ All five, or it is not done:
 - [ ] The repo still starts from `./init.sh`
 - [ ] **Anything surprising is written down** — see below. Nothing surprising happened is a fine answer; "no time" is not.
 
-Evidence is the anti-false-done mechanism. `harness.py cycle <project> <id> done` **refuses without it**, because a `done` nobody can check is indistinguishable from a lie. Project-level DoD lives in each brief and in `docs/PLAYBOOK.md`.
+Evidence is the anti-false-done mechanism. `harness.py cycle <project> <id> done` **refuses without it**, because a `done` nobody can check is indistinguishable from a lie. It also **refuses below the project's `coverage_gate`** — a number every document quoted and nothing enforced was a prior wearing a constraint's name. Project-level DoD lives in each brief and in `docs/PLAYBOOK.md`.
 
 ## When something surprises you, write it down before moving on
 

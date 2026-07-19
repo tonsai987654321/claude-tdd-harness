@@ -176,19 +176,33 @@ echo
 echo "=== Unproven completions ==="
 python3 - <<'PY'
 import json, pathlib, sys
-bad = []
-for f in sorted(pathlib.Path(".claude/state").glob("*.json")) if pathlib.Path(".claude/state").is_dir() else []:
+bad, under = [], []
+state_dir = pathlib.Path(".claude/state")
+for f in sorted(state_dir.glob("*.json")) if state_dir.is_dir() else []:
     s = json.loads(f.read_text(encoding="utf-8"))
+    project = s["project"]
     bad += [
-        f"{s['project']} cycle {c['id']}"
+        f"{project} cycle {c['id']}"
         for c in s["cycles"]
         if c["state"] == "done" and not c.get("evidence")
     ]
+    # `cycle ... done` now refuses below the gate, but state written before that could not have
+    # been refused. A repo carrying such a cycle should hear about it once, here.
+    cyc = pathlib.Path(f".claude/cycles/{project}.json")
+    gate = json.loads(cyc.read_text(encoding="utf-8")).get("coverage_gate") if cyc.is_file() else None
+    cov = s.get("coverage")
+    if gate is not None and cov is not None and cov < gate and any(c["state"] == "done" for c in s["cycles"]):
+        under.append(f"{project} at {cov}% (gate {gate}%)")
+
 if bad:
     print("  FAIL: marked done with no evidence: " + ", ".join(bad))
     print("        Re-verify and record evidence, or reopen the cycle.")
     sys.exit(1)
-print("  ok   every done cycle carries evidence")
+if under:
+    print("  FAIL: done cycles under the coverage gate: " + ", ".join(under))
+    print("        Cover the gap and re-run green, or change the gate deliberately.")
+    sys.exit(1)
+print("  ok   every done cycle carries evidence and meets its coverage gate")
 PY
 
 echo

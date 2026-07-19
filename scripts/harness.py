@@ -466,6 +466,28 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
         )
 
     state = load_state(project)
+
+    # And a `done` under the coverage gate is the same lie with a number on it. `coverage_gate`
+    # was written into every cycle file by the installer, validated to 0-100, quoted in the
+    # PLAYBOOK's definition of done and in the reconcile-auditor's checklist — and read by nothing
+    # that could refuse. In a harness whose whole argument is that a hook exiting 2 is a constraint
+    # and a paragraph is a prior, that made it a prior wearing a constraint's name.
+    #
+    # Checked here rather than in `green`, alongside the evidence rule and for the same reason:
+    # `green` runs many times inside a cycle and coverage climbing to the gate is the normal shape
+    # of the work. `done` is where the claim is made.
+    if new_state == "done":
+        gate = project_config(project).get("coverage_gate")
+        actual = state.get("coverage")
+        if gate is not None and actual is not None and actual < gate:
+            sys.exit(
+                f"REFUSED: cycle {cycle_id} cannot be 'done' at {actual}% coverage; "
+                f"{project}'s gate is {gate}%.\n"
+                f"  Cover the behaviour this cycle added, re-run green, then close it.\n"
+                f"  If the gate itself is wrong, change it in .claude/cycles/{project}.json "
+                f"deliberately — do not route around it here."
+            )
+
     for c in state["cycles"]:
         if str(c["id"]) == str(cycle_id):
             c["state"] = new_state

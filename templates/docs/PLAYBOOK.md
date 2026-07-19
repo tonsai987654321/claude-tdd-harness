@@ -93,7 +93,7 @@ python3 .claude/scripts/harness.py cycle <project> 5 queued
 
 The Definition of Done is in the project's brief. All of it, not most of it. The harness-level part is the same whatever the stack:
 
-- [ ] `harness.py suite <project>` — coverage at or above the `coverage_gate` in its cycle file
+- [ ] `harness.py suite <project>` — coverage at or above the `coverage_gate` in its cycle file (enforced: `cycle ... done` refuses below it)
 - [ ] `harness.py quality <project>` — every check the runner declares, clean
 - [ ] the service starts from a cold checkout by the documented command
 - [ ] any schema or migration state applies from empty
