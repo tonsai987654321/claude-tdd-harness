@@ -31,6 +31,12 @@ The repo is both the marketplace and the plugin, so one `marketplace add` is eno
 
 Verify what you installed with `/plugin list`, and remove it with `claude plugin uninstall tdd-harness@tonsai-plugins`.
 
+## Requirements
+
+One tool: **[uv](https://docs.astral.sh/uv/)**. The harness runs its own test suite through it in an isolated Python 3.12, and takes Python from it on a machine that has none — so the gate works on a box with no `python3` at all, and a repo with no Python in it still wants uv. `./init.sh` offers to install it if it is missing, and refuses to install anything when it is not talking to a terminal.
+
+Nothing else is installed for you. Docker, `gh` and Node are the *project's* tools: `init.sh` checks whatever `requires` in `.claude/harness.json` names — after the gate self-test, so a stopped Docker daemon can never prevent the gate from being verified — and leaves installing them to you.
+
 ## Use it
 
 In the repo you want the harness installed into:

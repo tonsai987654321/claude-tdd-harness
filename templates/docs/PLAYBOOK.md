@@ -14,6 +14,10 @@ Run the harness's own verification. It checks the toolchain, self-tests that the
 
 It fails fast. If it fails, repair that before adding scope — a harness on a broken baseline just makes the breakage restartable.
 
+**The harness needs one tool: `uv`.** It runs the harness's own suite in an isolated Python 3.12, and it supplies Python where the machine has none — so a repo with no Python in it still needs it, and a machine with no `python3` still works. If it is missing, `./init.sh` offers to install it and prints the command; run non-interactively it prints the command and stops, because a verification script may not change your machine unasked.
+
+Everything else — Docker, `gh`, Node — belongs to the projects, not to the harness. `init.sh` checks whatever `requires` in `.claude/harness.json` names, after the gate self-test, and never installs any of it: those need a daemon or a login, and which ones you want is your decision.
+
 ## Start a project
 
 From the harness root, in Claude Code:

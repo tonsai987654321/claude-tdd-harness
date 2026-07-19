@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -181,9 +182,39 @@ def test_gate_hook_command_is_portable(repo: Path) -> None:
     assert len(gate) == 1, f"expected exactly one gate hook, got {gate}"
 
     interpreter = gate[0].split()[0]
-    assert interpreter == "python3", f"gate hook must invoke a PATH-resolved python3, got {interpreter!r}"
+    assert interpreter in {"python3", "uv"}, (
+        f"gate hook must name a PATH-resolved python3, or uv which supplies one, got {interpreter!r}"
+    )
     assert not re.search(r"[A-Za-z]:[/\\]", gate[0]), f"absolute machine path in the gate hook: {gate[0]}"
     assert "$CLAUDE_PROJECT_DIR" in gate[0], "the script path must be resolved by the editor, not baked in"
+
+
+def test_the_hook_falls_back_to_uv_when_python3_is_absent(monkeypatch) -> None:
+    """A machine with uv and no python3 is exactly the machine init.sh now produces, since it
+    offers to install uv and nothing else. The hook has to be expressible there — uv fetches 3.12
+    itself, and the command stays PATH-resolved rather than pinning this machine's interpreter."""
+    real = shutil.which
+
+    def only_uv(name, *args, **kwargs):
+        return None if name == "python3" else real(name, *args, **kwargs)
+
+    monkeypatch.setattr(harness_init.shutil, "which", only_uv)
+    command, note = harness_init.gate_interpreter()
+
+    assert command.startswith("uv run")
+    assert "3.12" in command
+    assert note and "uv" in note
+
+
+def test_the_hook_stays_portable_when_neither_is_found(monkeypatch) -> None:
+    """With neither available there is no good answer, and an absolute path is the bad one: it
+    would be committed into settings.json and be wrong for every other clone. Keep the portable
+    name, say so loudly, and let init.sh's probe of the wired command be the thing that refuses."""
+    monkeypatch.setattr(harness_init.shutil, "which", lambda *args, **kwargs: None)
+    command, note = harness_init.gate_interpreter()
+
+    assert command == "python3"
+    assert note and "uv" in note
 
 
 def test_reinstall_repoints_rather_than_duplicating_the_hook(repo: Path) -> None:

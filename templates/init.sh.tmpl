@@ -34,16 +34,73 @@ hint_for() {
   esac
 }
 
-# The harness's own prerequisites, and nothing else. These two are hardcoded rather than read
-# from `requires` because the gate self-test below is the one thing this script exists to prove,
-# and it must not be reachable only on a machine that also happens to have Docker running. The
-# project's tools are checked further down, next to the suites that need them.
-# uv is here even for a repo with no Python project in it: it is how the harness runs its OWN
-# suite in an isolated 3.12 environment, without installing anything into the machine or assuming
-# the project's package manager. It is a harness dependency, not a statement about your stack.
+# The harness's own prerequisite, and nothing else. It is hardcoded rather than read from
+# `requires` because the gate self-test below is the one thing this script exists to prove, and it
+# must not be reachable only on a machine that also happens to have Docker running. The project's
+# tools are checked further down, next to the suites that need them.
+#
+# uv is the single one, even for a repo with no Python in it: it runs the harness's OWN suite in an
+# isolated 3.12 environment, and it supplies Python when the machine has none. Everything else the
+# harness needs follows from it, which is why this is the only thing offered for installation —
+# docker, gh and node belong to the project, need a daemon or a login, and are the user's to choose.
+uv_installer() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) echo 'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"' ;;
+    *)                    echo 'curl -LsSf https://astral.sh/uv/install.sh | sh' ;;
+  esac
+}
+
+ensure_uv() {
+  command -v uv >/dev/null 2>&1 && { echo "  ok   uv"; return 0; }
+
+  cmd="$(uv_installer)"
+  echo "MISSING: uv — the harness runs its own suite through it, and gets Python from it."
+  echo "         $(hint_for uv)"
+
+  # Never install without being asked, and never hang waiting to ask. A non-interactive run — CI,
+  # a headless agent, anything piping this script — gets the command and a failure, because
+  # silently changing the machine is not a thing a verification script may do.
+  if [ ! -t 0 ]; then
+    echo "  Not an interactive terminal, so nothing was installed. Run this, then ./init.sh again:"
+    echo "      $cmd"
+    exit 1
+  fi
+
+  printf "  Install uv now? [y/N] "
+  read -r reply || reply=""
+  case "$reply" in
+    [yY]*) ;;
+    *) echo "  Declined. Run this, then ./init.sh again:"; echo "      $cmd"; exit 1 ;;
+  esac
+
+  eval "$cmd" || { echo "  The installer failed. Install uv by hand, then re-run ./init.sh."; exit 1; }
+
+  # The installer drops uv in ~/.local/bin, which this shell will not have on PATH yet. Add it for
+  # the rest of this run, then confirm by actually finding the binary — an installer's exit code
+  # says the download worked, not that the tool is now runnable.
+  PATH="$HOME/.local/bin:$PATH"
+  export PATH
+  command -v uv >/dev/null 2>&1 || {
+    echo "  uv installed but is not on PATH in this shell. Open a new terminal and re-run ./init.sh."
+    exit 1
+  }
+  echo "  ok   uv (just installed)"
+}
+
 echo "=== Harness prerequisites ==="
-need python3 "$(hint_for python3)"
-need uv "$(hint_for uv)"
+ensure_uv
+
+# Everything below runs Python through $PY. Where the machine has a python3 that is the fastest
+# path; where it does not, uv fetches 3.12 on demand and costs about ten milliseconds more. Naming
+# `python3` unconditionally is what made a machine without one unable to run this script at all,
+# even with uv sitting right there able to supply one.
+if command -v python3 >/dev/null 2>&1; then
+  PY="python3"
+  echo "  ok   python3"
+else
+  PY="uv run --no-project --python 3.12 python"
+  echo "  ok   python 3.12 (provided by uv)"
+fi
 
 echo
 echo "=== Harness self-test ==="
@@ -58,7 +115,7 @@ echo "=== Harness self-test ==="
 # in Claude Code's shell, where a `python3` that resolves here may not exist, and a gate whose
 # interpreter is missing is a gate that never runs. Testing the wired command is the only way
 # this self-test speaks about the gate the editor will actually fire.
-GATE_CMD="$(python3 - <<'PY'
+GATE_CMD="$($PY - <<'PY'
 import json, pathlib
 cfg = {}
 p = pathlib.Path(".claude/settings.json")
@@ -99,7 +156,7 @@ while IFS='|' read -r path want label; do
   fi
   echo "  ok   $label"
 done <<EOF
-$(python3 - <<'PY'
+$($PY - <<'PY'
 import json, pathlib
 
 cfg = {}
@@ -149,7 +206,7 @@ PY
 )
 EOF
 
-python3 "$H" status >/dev/null
+$PY "$H" status >/dev/null
 echo "  ok   dashboard renders"
 
 # The suite under tests/ drives harness.py itself. It is pinned to 3.12 because it relies on
@@ -174,7 +231,7 @@ fi
 
 echo
 echo "=== Unproven completions ==="
-python3 - <<'PY'
+$PY - <<'PY'
 import json, pathlib, sys
 bad, under = [], []
 state_dir = pathlib.Path(".claude/state")
@@ -211,7 +268,7 @@ echo "=== Project tooling ==="
 # than at the top of the script. A missing Docker daemon is a real failure for a repo whose tests
 # are containerised, but it says nothing about the gate, and it must never be able to abort the
 # run before the self-test above has spoken.
-for tool in $(python3 -c '
+for tool in $($PY -c '
 import json, pathlib
 cfg = {}
 p = pathlib.Path(".claude/harness.json")
@@ -223,7 +280,7 @@ print(" ".join(t for t in cfg.get("requires", ["python3", "uv"]) if t not in ("p
   need "$tool" "$(hint_for "$tool")"
 done
 
-if python3 -c '
+if $PY -c '
 import json,pathlib,sys
 p=pathlib.Path(".claude/harness.json")
 cfg=json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
@@ -236,7 +293,7 @@ sys.exit(0 if "docker" in cfg.get("requires",[]) else 1)'; then
   echo "  ok   docker daemon"
 fi
 
-if python3 -c '
+if $PY -c '
 import json,pathlib,sys
 p=pathlib.Path(".claude/harness.json")
 cfg=json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
@@ -252,7 +309,7 @@ echo "=== Project suites ==="
 # .claude/harness.json. Sniffing for pyproject.toml and package.json — which is what this loop
 # used to do — meant a repo on poetry, go or cargo silently reported "not scaffolded yet" and
 # never ran a single check.
-PROJECTS_DIR="$(python3 -c '
+PROJECTS_DIR="$($PY -c '
 import json, pathlib
 p = pathlib.Path(".claude/harness.json")
 cfg = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
@@ -270,10 +327,10 @@ for cyclefile in .claude/cycles/*.json; do
   fi
   found=1
   echo "--- $p"
-  python3 "$H" quality "$p"
+  $PY "$H" quality "$p"
   # `suite`, not `green`: green shuts the gate on success, and running the health check in the
   # middle of a RED cycle must not close a gate that cycle legitimately opened.
-  python3 "$H" suite "$p"
+  $PY "$H" suite "$p"
 done
 [ "$found" = "1" ] || echo "  nothing to run yet — link_projects.sh clones the project repos"
 
@@ -281,8 +338,8 @@ echo
 echo "=== Verification complete ==="
 echo
 echo "Next steps:"
-echo "1. Read PROGRESS.md for the board, or run: python3 $H status"
-echo "2. Take the next action in HANDOFF.md, or run: python3 $H handoff"
+echo "1. Read PROGRESS.md for the board, or run: $PY $H status"
+echo "2. Take the next action in HANDOFF.md, or run: $PY $H handoff"
 echo "3. Work ONE cycle. Never skip: later tests depend on earlier code."
 echo "4. No production code without a failing test. The gate enforces this; do not bypass it."
 echo "5. A cycle is done only with evidence: what ran, what it printed, the two commit SHAs."

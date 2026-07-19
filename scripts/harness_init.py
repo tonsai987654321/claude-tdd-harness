@@ -118,13 +118,22 @@ def gate_interpreter() -> tuple[str, str | None]:
     """
     if shutil.which("python3"):
         return "python3", None
+    if shutil.which("uv"):
+        # uv fetches 3.12 on demand and is itself portable, so this stays correct on any machine
+        # that has uv — which init.sh now offers to install. Measured at ~10ms over a direct
+        # python3 on a warm cache, which is nothing against a gate that otherwise may not run.
+        return (
+            "uv run --no-project --python 3.12 python",
+            "python3 was not found on PATH, so the gate hook runs through uv, which supplies "
+            "Python 3.12 itself. Portable, and about ten milliseconds slower per write.",
+        )
     return (
         "python3",
-        "python3 was not found on PATH from the installer. The gate hook still names it, because "
-        "an absolute path here would be committed into .claude/settings.json and be wrong on "
-        "every other machine. Run ./init.sh — it probes the wired command — and if the gate "
-        "probes fail, put a working interpreter on PATH before trusting this repo. "
-        "(Git Bash shims are invisible to this check, so this may be a false alarm.)",
+        "neither python3 nor uv was found on PATH. The gate hook still names python3, because an "
+        "absolute path here would be committed into .claude/settings.json and be wrong on every "
+        "other machine. Run ./init.sh — it offers to install uv, and it probes the wired command "
+        "rather than trusting it. (Git Bash shims are invisible to this check, so this may be a "
+        "false alarm.)",
     )
 
 
