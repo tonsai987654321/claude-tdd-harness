@@ -63,6 +63,13 @@ A re-sync never rewrites `.claude/harness.json`, so a repo installed on an older
 
 The blanket `--force` is gone. It was the only way to update a vendored `harness.py`, and it took the constitution, the glossary and the cycle list with it — see [lesson 0005](docs/lessons/0005-vendored-code-needs-a-re-sync-path.md).
 
+## How it works
+
+[docs/FLOW.md](docs/FLOW.md) traces the whole system as diagrams: the `PreToolUse` decision path,
+one TDD cycle, the two refusals that close a cycle, install and re-sync, `init.sh`'s verification
+order, and which behaviour each config key drives. Read it if you want the mechanism; the summary
+below is the one-paragraph version.
+
 ## How the gate works
 
 ```

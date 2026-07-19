@@ -28,6 +28,10 @@ SEARCHED = [
     *(PLUGIN_ROOT / "commands").glob("*.md"),
     *(PLUGIN_ROOT / "templates").rglob("*.md"),
     *(PLUGIN_ROOT / "templates").rglob("*.tmpl"),
+    # docs/, minus the lessons. A lesson's whole job is to record what used to be true, and three
+    # of them name `/red`, `/build` and `/continue` precisely because those commands never
+    # existed — holding the history to the current command set would delete the history.
+    *(p for p in (PLUGIN_ROOT / "docs").rglob("*.md") if "lessons" not in p.parts),
     PLUGIN_ROOT / "README.md",
 ]
 
