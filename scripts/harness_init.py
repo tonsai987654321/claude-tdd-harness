@@ -7,16 +7,28 @@ PreToolUse hook into `.claude/settings.json`, and seeds one cycle file per proje
     harness_init.py --target . --owner alice \
         --project billing-api:pytest:90 --project web:vitest:80
 
-Idempotent and non-destructive: an existing file is reported and skipped, never overwritten,
-unless --force is passed. The exception is `.claude/settings.json`, which is *merged* — the
-harness hook is added alongside whatever hooks are already configured rather than replacing
-the file, because clobbering a user's hooks to install a gate would be its own small betrayal.
+Run it again after a plugin update and it *re-syncs*: every file the harness owns is rewritten
+from the plugin, every file you own is left exactly as you left it. The two sets are declared
+below and the distinction is the whole design —
+
+  * FRAMEWORK — the gate and its tooling. Vendored into the repo so it keeps working in a fresh
+    clone with the plugin uninstalled, which means a bugfix in the plugin reaches an installed
+    repo only when the installer overwrites it. Skipping these on reinstall stranded every fix
+    in every scaffolded repo, undetectably; see docs/lessons/0005.
+  * USER — the constitution, the glossary, the config, the cycles, the lessons. Overwriting
+    these destroys the only work in the repo nobody can regenerate. `--reset <path>` overwrites
+    one of them, named explicitly, because the blanket `--force` that used to do this was the
+    only upgrade path and it took the user's content with it.
+
+`.claude/settings.json` and `.gitignore` are *merged* — the harness hooks are added alongside
+whatever is already configured rather than replacing the file.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -28,14 +40,24 @@ if hasattr(sys.stdout, "reconfigure"):
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = PLUGIN_ROOT / "templates"
 
-GATE_HOOK = 'python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" gate'
-STATS_HOOK = 'python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" stats --write'
+VERSION_FILE = ".claude/.harness-version"
+
+# The runners with a definition in harness.json.tmpl. A project scaffolded against a name that is
+# not here produces a cycle file that is fatal at the first `red`, one whole session later.
+KNOWN_RUNNERS = ("pytest", "vitest")
+NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 # Copied into the target's .claude/scripts/. The harness must keep working in a fresh clone with
 # the plugin uninstalled — a portfolio repo is read by people who do not have your plugins.
 # harness_init.py is deliberately NOT here. It resolves its templates relative to the plugin
 # root, so a copy sitting in the target's .claude/scripts/ looks for .claude/templates/ and dies
 # on FileNotFoundError. Re-scaffolding is the plugin's job, not the scaffolded repo's.
+# Tests that drive the installer rather than the gate. They stay in the plugin: the installer is
+# deliberately not vendored (it resolves templates relative to __file__ and dies from
+# .claude/scripts/ — docs/lessons/0003), so a copy of its suite in a scaffolded repo tests a file
+# that is not there and reports the harness red. Which is exactly what it did, once.
+NOT_VENDORED = {"test_install.py"}
+
 SCRIPTS = [
     "harness.py",
     "next_cycle.py",
@@ -47,6 +69,45 @@ SCRIPTS = [
 ]
 
 
+def plugin_version() -> str:
+    manifest = PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
+    try:
+        return json.loads(manifest.read_text(encoding="utf-8"))["version"]
+    except (OSError, KeyError, json.JSONDecodeError):
+        return "unknown"
+
+
+def gate_interpreter() -> tuple[str, str | None]:
+    """The interpreter the hook command names, and a warning when we could not confirm it resolves.
+
+    Always `python3`, and the reasoning matters because the obvious alternative is wrong.
+
+    The hook runs in Claude Code's own shell, not in `init.sh`, so `init.sh`'s `command -v python3`
+    never speaks for it. On a machine where `python3` is genuinely absent the hook may never fire,
+    and an unfired PreToolUse hook is a gate that is silently off — the worst failure this plugin
+    has. Pinning `sys.executable` fixes that for exactly one machine and breaks it for every other:
+    `.claude/settings.json` is committed, not gitignored, so whatever goes in it travels to every
+    clone. A path like `C:/Users/me/python.exe` in a cloned repo is not a portable gate, it is a
+    guaranteed-dead one, and the repo being readable by people who do not have this plugin is the
+    whole reason the harness is vendored in the first place.
+
+    So: write the portable name, and warn when it cannot be seen from here. `./init.sh` probes the
+    command that is actually wired and fails loudly if it does not run, which is the mechanical
+    backstop — but it is a command someone has to run, and the hook fires on its own. Treat the
+    warning as real.
+    """
+    if shutil.which("python3"):
+        return "python3", None
+    return (
+        "python3",
+        "python3 was not found on PATH from the installer. The gate hook still names it, because "
+        "an absolute path here would be committed into .claude/settings.json and be wrong on "
+        "every other machine. Run ./init.sh — it probes the wired command — and if the gate "
+        "probes fail, put a working interpreter on PATH before trusting this repo. "
+        "(Git Bash shims are invisible to this check, so this may be a false alarm.)",
+    )
+
+
 @dataclass
 class Project:
     name: str
@@ -55,47 +116,79 @@ class Project:
 
     @classmethod
     def parse(cls, spec: str) -> Project:
-        """`name`, `name:runner`, or `name:runner:coverage`."""
+        """`name`, `name:runner`, or `name:runner:coverage`.
+
+        Every field is validated here rather than at first use. A bad runner or an unreachable
+        coverage gate that is accepted at install time surfaces as a fatal error in the middle of
+        the first cycle, which is the most expensive place to learn about a typo.
+        """
         parts = spec.split(":")
-        if not parts[0]:
-            raise argparse.ArgumentTypeError(f"project spec {spec!r} has no name")
         name = parts[0]
+        if not NAME_RE.fullmatch(name):
+            raise argparse.ArgumentTypeError(
+                f"project spec {spec!r}: name must be one path segment of letters, digits, dot, "
+                "dash or underscore"
+            )
         runner = parts[1] if len(parts) > 1 and parts[1] else "pytest"
+        if runner not in KNOWN_RUNNERS:
+            raise argparse.ArgumentTypeError(
+                f"project spec {spec!r}: unknown runner {runner!r}. Known: "
+                f"{', '.join(KNOWN_RUNNERS)}. Anything else needs a runner definition in "
+                ".claude/harness.json first — see 'Adding a runner' in docs/PLAYBOOK.md."
+            )
         try:
             coverage = int(parts[2]) if len(parts) > 2 and parts[2] else 90
         except ValueError:
             raise argparse.ArgumentTypeError(f"project spec {spec!r}: coverage must be an integer")
+        if not 0 <= coverage <= 100:
+            raise argparse.ArgumentTypeError(
+                f"project spec {spec!r}: coverage {coverage} is not a percentage. A gate above 100 "
+                "can never be met."
+            )
         return cls(name=name, runner=runner, coverage=coverage)
 
 
 class Writer:
-    """Tracks what was written, skipped, or merged, so the run can report honestly."""
+    """Writes files, tracking which were created, re-synced, or left alone.
 
-    def __init__(self, root: Path, force: bool) -> None:
+    Two kinds, and the difference is the point. `framework` files belong to the harness and are
+    rewritten every run, so a plugin update actually reaches the repo. `user` files belong to the
+    repo and are never rewritten unless named in --reset.
+    """
+
+    def __init__(self, root: Path, reset: set[str]) -> None:
         self.root = root
-        self.force = force
-        self.written: list[str] = []
-        self.skipped: list[str] = []
+        self.reset = reset
+        self.created: list[str] = []
+        self.resynced: list[str] = []
+        self.kept: list[str] = []
 
-    def write(self, rel: str, content: str, executable: bool = False) -> None:
+    def _place(self, rel: str, write: "callable[[Path], None]", framework: bool) -> None:
         dest = self.root / rel
-        if dest.exists() and not self.force:
-            self.skipped.append(rel)
+        existed = dest.exists()
+        if existed and not framework and rel not in self.reset:
+            self.kept.append(rel)
             return
+        before = dest.read_bytes() if existed else None
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(content, encoding="utf-8")
-        if executable:
-            dest.chmod(0o755)
-        self.written.append(rel)
+        write(dest)
+        if not existed:
+            self.created.append(rel)
+        elif dest.read_bytes() != before:
+            self.resynced.append(rel)
 
-    def copy(self, src: Path, rel: str) -> None:
-        dest = self.root / rel
-        if dest.exists() and not self.force:
-            self.skipped.append(rel)
-            return
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dest)
-        self.written.append(rel)
+    def write(self, rel: str, content: str, framework: bool = False, executable: bool = False) -> None:
+        def do(dest: Path) -> None:
+            # newline="\n" explicitly: the default translates to os.linesep, which on Windows
+            # vendors a CRLF init.sh into a repo that is expected to run on Linux CI.
+            dest.write_text(content, encoding="utf-8", newline="\n")
+            if executable:
+                dest.chmod(0o755)
+
+        self._place(rel, do, framework)
+
+    def copy(self, src: Path, rel: str, framework: bool = False) -> None:
+        self._place(rel, lambda dest: shutil.copy2(src, dest), framework)
 
 
 def render(name: str, **subs: str) -> str:
@@ -105,7 +198,20 @@ def render(name: str, **subs: str) -> str:
     return text
 
 
-def merge_settings(root: Path) -> str:
+def derive_requires(projects: list[Project]) -> list[str]:
+    """The tools this repo will actually need, from the runners it was given.
+
+    Defaulting to docker and gh made `init.sh` abort in the environment check on a machine with
+    no Docker daemon — before it ever reached the gate self-test, which is the one thing the
+    install is supposed to prove and which needs neither.
+    """
+    requires = ["python3", "uv"]
+    if any(p.runner == "vitest" for p in projects):
+        requires += ["node", "npm"]
+    return requires
+
+
+def merge_settings(root: Path, interpreter: str) -> str:
     """Add the harness hooks to .claude/settings.json without disturbing what is there.
 
     Returns a human-readable note about what happened.
@@ -118,30 +224,45 @@ def merge_settings(root: Path) -> str:
         except json.JSONDecodeError:
             return f"!! {path.relative_to(root)} is not valid JSON — left alone. Add the gate hook by hand."
 
-    hooks = settings.setdefault("hooks", {})
-    added = []
+    gate = f'{interpreter} "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" gate'
+    stats = f'{interpreter} "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" stats --write'
 
-    def ensure(event: str, command: str, matcher: str | None) -> None:
+    hooks = settings.setdefault("hooks", {})
+    changed = []
+
+    def ensure(event: str, command: str, subcommand: str, matcher: str | None) -> None:
+        """Install `command`, replacing any existing harness hook for the same subcommand.
+
+        Matching on the exact command string would be wrong now that the interpreter is resolved
+        per machine: a reinstall under a different interpreter would leave the old hook in place
+        and add a second one, and the gate would fire twice — once through an interpreter that
+        does not exist.
+        """
         entries = hooks.setdefault(event, [])
+        marker = f'harness.py" {subcommand}'
         for entry in entries:
             for hook in entry.get("hooks", []):
-                if hook.get("command") == command:
-                    return  # Already wired. Installing it twice would fire the gate twice.
+                existing = hook.get("command", "")
+                if "harness.py" in existing and marker in existing:
+                    if existing != command:
+                        hook["command"] = command
+                        changed.append(f"{event} (re-pointed)")
+                    return
         block: dict = {"hooks": [{"type": "command", "command": command}]}
         if matcher:
             block["matcher"] = matcher
         entries.append(block)
-        added.append(event)
+        changed.append(event)
 
-    ensure("PreToolUse", GATE_HOOK, "Write|Edit|MultiEdit|NotebookEdit")
-    ensure("SubagentStop", STATS_HOOK, None)
+    ensure("PreToolUse", gate, "gate", "Write|Edit|MultiEdit|NotebookEdit")
+    ensure("SubagentStop", stats, "stats", None)
 
-    if not added:
+    if not changed:
         return "== .claude/settings.json already wired (both hooks present)"
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-    return f"++ .claude/settings.json (merged: {', '.join(added)})"
+    path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8", newline="\n")
+    return f"++ .claude/settings.json (merged: {', '.join(changed)})"
 
 
 def append_gitignore(root: Path) -> str:
@@ -150,7 +271,7 @@ def append_gitignore(root: Path) -> str:
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
     if "--- TDD harness ---" in existing:
         return "== .gitignore already carries the harness block"
-    path.write_text(existing + block, encoding="utf-8")
+    path.write_text(existing + block, encoding="utf-8", newline="\n")
     return "++ .gitignore (harness block appended)"
 
 
@@ -177,8 +298,22 @@ def cycle_stub(project: Project, order: int) -> str:
     return json.dumps(body, indent=2, ensure_ascii=False) + "\n"
 
 
+def install_lessons(writer: Writer) -> None:
+    """Seed docs/lessons/ and its index.
+
+    One file per lesson, mirroring docs/adr/, so an agent can read the index and open only what
+    is relevant. A single growing LESSONS.md forces the whole history into context or none of it,
+    and "none of it" is what happened: nothing in the harness ever read the file.
+    """
+    src = TEMPLATES / "docs" / "lessons"
+    for entry in sorted(src.glob("*.md")):
+        # Seeded, then owned by the repo: lessons written here are the user's record, and a
+        # reinstall must not overwrite one they edited.
+        writer.copy(entry, f"docs/lessons/{entry.name}")
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Install the TDD harness into a repo.")
+    ap = argparse.ArgumentParser(description="Install or re-sync the TDD harness in a repo.")
     ap.add_argument("--target", default=".", help="repo to install into (default: cwd)")
     ap.add_argument("--owner", default="", help="git host owner, used by link_projects.sh")
     ap.add_argument(
@@ -186,10 +321,18 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         metavar="NAME[:RUNNER[:COVERAGE]]",
-        help="a project to build; repeatable. Runner defaults to pytest, coverage to 90.",
+        help=f"a project to build; repeatable. Runner is one of {', '.join(KNOWN_RUNNERS)} "
+        "(default pytest), coverage 0-100 (default 90).",
     )
     ap.add_argument("--purpose", default="", help="one paragraph: what these projects are for")
-    ap.add_argument("--force", action="store_true", help="overwrite existing files")
+    ap.add_argument(
+        "--reset",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="overwrite one repo-owned file, named exactly (e.g. --reset CLAUDE.md). Repeatable. "
+        "Harness-owned files are re-synced every run and need no flag.",
+    )
     args = ap.parse_args(argv)
 
     root = Path(args.target).resolve()
@@ -203,31 +346,66 @@ def main(argv: list[str] | None = None) -> int:
         print(f"harness-init: {exc}", file=sys.stderr)
         return 1
 
-    writer = Writer(root, args.force)
+    version = plugin_version()
+    interpreter, interpreter_note = gate_interpreter()
+    writer = Writer(root, set(args.reset))
 
-    # 1. Scripts. These make the repo self-contained: the gate keeps working with the plugin gone.
+    # ---------------------------------------------------------------- harness-owned (re-synced)
     for name in SCRIPTS:
         src = PLUGIN_ROOT / "scripts" / name
         if src.exists():
-            writer.copy(src, f".claude/scripts/{name}")
+            writer.copy(src, f".claude/scripts/{name}", framework=True)
     # The suite that drives harness.py itself. It goes under .claude/, not the repo's tests/,
     # because a target repo's tests/ is its own — init.sh running that as "the harness suite"
     # would report someone else's failing tests as a broken gate.
     for name in sorted((PLUGIN_ROOT / "tests").glob("test_*.py")):
-        writer.copy(name, f".claude/harness-tests/{name.name}")
+        if name.name in NOT_VENDORED:
+            continue
+        writer.copy(name, f".claude/harness-tests/{name.name}", framework=True)
+
+    writer.write("init.sh", (TEMPLATES / "init.sh.tmpl").read_text(encoding="utf-8"),
+                 framework=True, executable=True)
+    writer.copy(TEMPLATES / "docs" / "PLAYBOOK.md", "docs/PLAYBOOK.md", framework=True)
+    writer.copy(TEMPLATES / "docs" / "adr" / "0000-template.md", "docs/adr/0000-template.md",
+                framework=True)
+    # The ADR that explains why the gate exists travels with the gate. A mechanism whose reason
+    # is left behind gets removed by the first person who finds it inconvenient.
+    writer.copy(TEMPLATES / "docs" / "adr" / "0003-mechanical-red-gate.md",
+                "docs/adr/0003-mechanical-red-gate.md", framework=True)
+    if any(p.runner == "vitest" for p in projects):
+        writer.copy(TEMPLATES / "docs" / "adr" / "0009-one-gate-many-runners.md",
+                    "docs/adr/0009-one-gate-many-runners.md", framework=True)
+
+    # The stamp has to be harness-owned. Putting it in harness.json — which the user edits, and
+    # which is therefore never rewritten — would produce a version marker that is correct exactly
+    # once and then lies for the rest of the repo's life.
+    writer.write(
+        VERSION_FILE,
+        f"{version}\n"
+        "# Written by harness_init.py. The version of the tdd-harness plugin that last re-synced\n"
+        "# .claude/scripts/. Compare it with the installed plugin to see whether this repo is\n"
+        "# carrying an old gate; re-run /harness-init to bring it forward.\n",
+        framework=True,
+    )
 
     for rel in (".claude/state", ".claude/cycles", "brief"):
         (root / rel).mkdir(parents=True, exist_ok=True)
 
-    # 2. Config.
-    writer.write(".claude/harness.json", render("harness.json.tmpl", OWNER=args.owner or "CHANGE-ME"))
+    # ------------------------------------------------------------------- repo-owned (preserved)
+    writer.write(
+        ".claude/harness.json",
+        render(
+            "harness.json.tmpl",
+            OWNER=args.owner or "CHANGE-ME",
+            REQUIRES=json.dumps(derive_requires(projects)),
+        ),
+    )
 
-    # 3. One cycle file per project. These are stubs on purpose — the real cycles are lifted
-    #    from each brief, and inventing them here would be scope the brief never asked for.
+    # Stubs on purpose — the real cycles are lifted from each brief, and inventing them here
+    # would be scope the brief never asked for.
     for order, project in enumerate(projects, start=1):
         writer.write(f".claude/cycles/{project.name}.json", cycle_stub(project, order))
 
-    # 4. Docs and the constitution.
     quality = "the linter, the type checker and the test suite with coverage"
     writer.write(
         "CLAUDE.md",
@@ -250,35 +428,27 @@ def main(argv: list[str] | None = None) -> int:
             FIRST_PROJECT=projects[0].name if projects else "first-project",
         ),
     )
-    writer.write("docs/LESSONS.md", render("docs/LESSONS.md.tmpl"))
-    writer.copy(TEMPLATES / "docs" / "PLAYBOOK.md", "docs/PLAYBOOK.md")
-    writer.copy(TEMPLATES / "docs" / "adr" / "0000-template.md", "docs/adr/0000-template.md")
-    # The ADR that explains why the gate exists travels with the gate. A mechanism whose reason
-    # is left behind gets removed by the first person who finds it inconvenient.
-    writer.copy(TEMPLATES / "docs" / "adr" / "0003-mechanical-red-gate.md", "docs/adr/0003-mechanical-red-gate.md")
-    if any(p.runner == "vitest" for p in projects):
-        writer.copy(
-            TEMPLATES / "docs" / "adr" / "0009-one-gate-many-runners.md",
-            "docs/adr/0009-one-gate-many-runners.md",
-        )
+    install_lessons(writer)
 
-    # 5. The entrypoint.
-    writer.write("init.sh", (TEMPLATES / "init.sh.tmpl").read_text(encoding="utf-8"), executable=True)
-
-    # 6. Hooks and gitignore — merged, not overwritten.
-    settings_note = merge_settings(root)
+    # ------------------------------------------------------------------------ merged, not owned
+    settings_note = merge_settings(root, interpreter)
     gitignore_note = append_gitignore(root)
 
-    # ------------------------------------------------------------------ report
-    print(f"Harness installed into {root}\n")
-    for rel in writer.written:
+    # ------------------------------------------------------------------------------------ report
+    print(f"Harness {version} installed into {root}\n")
+    for rel in writer.created:
         print(f"  ++ {rel}")
+    for rel in writer.resynced:
+        print(f"  ~~ {rel}  (re-synced from the plugin)")
     print(f"  {settings_note}")
     print(f"  {gitignore_note}")
-    if writer.skipped:
-        print("\n  Left alone (already present — pass --force to overwrite):")
-        for rel in writer.skipped:
+    if writer.kept:
+        print("\n  Yours, left untouched (use --reset <path> to overwrite one):")
+        for rel in writer.kept:
             print(f"  == {rel}")
+
+    if interpreter_note:
+        print(f"\n  !! {interpreter_note}")
 
     print("\nNext:")
     print("  1. Write the briefs under brief/ — the harness builds what the specs say, nothing more.")

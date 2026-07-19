@@ -39,7 +39,7 @@ You are running the build **continuously**. Do not stop between cycles for appro
    - `DONE` → every cycle of every project is done and evidenced. Run each project's DoD check, report final status, and **stop** (do not schedule another wakeup — call `ScheduleWakeup` with `stop: true`).
    - `BUILD <project> <id> <title>` → that is the cycle to run.
 
-2. **Recover first if the last run was interrupted.** A subagent killed mid-cycle leaves the cycle `red` with the gate `OPEN` and an uncommitted test in the project tree (see `docs/LESSONS.md`). Before dispatching:
+2. **Recover first if the last run was interrupted.** A subagent killed mid-cycle leaves the cycle `red` with the gate `OPEN` and an uncommitted test in the project tree (see `harness.py lessons`). Before dispatching:
    - `git -C projects/<project> status --short` — if there is an untracked/modified test with no matching commit, move it aside (it was never gated) and confirm the baseline suite passes.
    - If `.claude/state/<project>.json` shows the target cycle `red` but no `[RED]` commit exists for it, reset it: `harness.py cycle <project> <id> queued -`, and set the gate back to SHUT.
 

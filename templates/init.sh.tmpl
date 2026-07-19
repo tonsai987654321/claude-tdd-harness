@@ -18,8 +18,6 @@ ROOT="$(pwd -W 2>/dev/null)" || true
 export CLAUDE_PROJECT_DIR="$ROOT"
 H=".claude/scripts/harness.py"
 
-echo "=== Environment ==="
-
 need() {
   command -v "$1" >/dev/null 2>&1 || { echo "MISSING: $1 — $2"; exit 1; }
   echo "  ok   $1"
@@ -36,41 +34,13 @@ hint_for() {
   esac
 }
 
-# Which tools this repo actually needs. A harness with no containerised tests should not
-# fail because Docker is not running.
-for tool in $(python3 -c '
-import json, pathlib
-cfg = {}
-p = pathlib.Path(".claude/harness.json")
-if p.is_file():
-    try: cfg = json.loads(p.read_text(encoding="utf-8"))
-    except Exception: pass
-print(" ".join(cfg.get("requires", ["python3", "uv"])))
-'); do
-  need "$tool" "$(hint_for "$tool")"
-done
-
-if command -v docker >/dev/null 2>&1 && python3 -c '
-import json,pathlib,sys
-p=pathlib.Path(".claude/harness.json")
-cfg=json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
-sys.exit(0 if "docker" in cfg.get("requires",[]) else 1)'; then
-  docker info >/dev/null 2>&1 || {
-    echo "FAIL: the Docker daemon is not running."
-    echo "      Integration tests use testcontainers and will fail at the first fixture."
-    exit 1
-  }
-  echo "  ok   docker daemon"
-fi
-
-if python3 -c '
-import json,pathlib,sys
-p=pathlib.Path(".claude/harness.json")
-cfg=json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
-sys.exit(0 if "gh" in cfg.get("requires",[]) else 1)'; then
-  gh auth status >/dev/null 2>&1 || { echo "FAIL: gh is not authenticated. Run: gh auth login"; exit 1; }
-  echo "  ok   gh authenticated"
-fi
+# The harness's own prerequisites, and nothing else. These two are hardcoded rather than read
+# from `requires` because the gate self-test below is the one thing this script exists to prove,
+# and it must not be reachable only on a machine that also happens to have Docker running. The
+# project's tools are checked further down, next to the suites that need them.
+echo "=== Harness prerequisites ==="
+need python3 "$(hint_for python3)"
+need uv "$(hint_for uv)"
 
 echo
 echo "=== Harness self-test ==="
@@ -80,7 +50,40 @@ echo "=== Harness self-test ==="
 # Probe a synthetic project, never a real one. A real project's gate is legitimately OPEN
 # in the middle of a RED cycle, and this check must not read honest work as a broken gate.
 
-probe() { echo "{\"tool_input\":{\"file_path\":\"$ROOT/$1\"}}" | python3 "$H" gate >/dev/null 2>&1; echo $?; }
+# Probe through the command string that is actually wired into .claude/settings.json, not
+# through a `python3 $H` of this script's own choosing. Those are different things: the hook runs
+# in Claude Code's shell, where a `python3` that resolves here may not exist, and a gate whose
+# interpreter is missing is a gate that never runs. Testing the wired command is the only way
+# this self-test speaks about the gate the editor will actually fire.
+GATE_CMD="$(python3 - <<'PY'
+import json, pathlib
+cfg = {}
+p = pathlib.Path(".claude/settings.json")
+if p.is_file():
+    try:
+        cfg = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+for entry in cfg.get("hooks", {}).get("PreToolUse", []):
+    for hook in entry.get("hooks", []):
+        cmd = hook.get("command", "")
+        if "harness.py" in cmd and cmd.rstrip().endswith("gate"):
+            print(cmd)
+            raise SystemExit(0)
+print("MISSING")
+PY
+)"
+if [ "$GATE_CMD" = "MISSING" ]; then
+  # Not a skip. A repo with no PreToolUse gate hook has no gate at all, however healthy
+  # harness.py looks in isolation.
+  echo "FAIL: no PreToolUse gate hook found in .claude/settings.json — nothing is guarding this repo."
+  echo "      Re-run the installer, or add the hook by hand (see docs/PLAYBOOK.md)."
+  exit 1
+fi
+GATE_CMD="${GATE_CMD//\$CLAUDE_PROJECT_DIR/$ROOT}"
+GATE_CMD="${GATE_CMD//\$\{CLAUDE_PROJECT_DIR\}/$ROOT}"
+
+probe() { echo "{\"tool_input\":{\"file_path\":\"$ROOT/$1\"}}" | eval "$GATE_CMD" >/dev/null 2>&1; echo $?; }
 
 # Every guarded path must block, and a representative unguarded one must not. Both lists are
 # generated from the config, so a repo that guards `lib/` gets `lib/` probed without editing this.
@@ -149,14 +152,21 @@ echo "  ok   dashboard renders"
 # The suite under tests/ drives harness.py itself. It is pinned to 3.12 because it relies on
 # EncodingWarning (3.10+) to prove the harness never falls back to the machine's locale codec --
 # on an older interpreter the guard is ignored and every test would pass against broken code.
-if [ -d "$ROOT/.claude/harness-tests" ]; then
-  if uv run --no-project --python 3.12 --with pytest pytest "$ROOT/.claude/harness-tests" -q >/dev/null 2>&1; then
-    echo "  ok   harness suite passes"
-  else
-    echo "FAIL: the harness's own test suite is red. Run:"
-    echo "      uv run --no-project --python 3.12 --with pytest pytest .claude/harness-tests -q"
-    exit 1
-  fi
+#
+# Deliberately unconditional. The installer always writes this directory, so a missing suite is a
+# broken install rather than a repo that happens not to have one — and a check that can skip
+# itself is indistinguishable, in the output, from a check that passed. See docs/lessons/0002.
+if [ ! -d "$ROOT/.claude/harness-tests" ]; then
+  echo "FAIL: .claude/harness-tests/ is missing — the harness's own suite was never installed."
+  echo "      Re-run /harness-init; the gate above is unverified without it."
+  exit 1
+fi
+if uv run --no-project --python 3.12 --with pytest pytest "$ROOT/.claude/harness-tests" -q >/dev/null 2>&1; then
+  echo "  ok   harness suite passes"
+else
+  echo "FAIL: the harness's own test suite is red. Run:"
+  echo "      uv run --no-project --python 3.12 --with pytest pytest .claude/harness-tests -q"
+  exit 1
 fi
 
 echo
@@ -177,6 +187,46 @@ if bad:
     sys.exit(1)
 print("  ok   every done cycle carries evidence")
 PY
+
+echo
+echo "=== Project tooling ==="
+# `requires` from .claude/harness.json — the tools the project suites need, checked here rather
+# than at the top of the script. A missing Docker daemon is a real failure for a repo whose tests
+# are containerised, but it says nothing about the gate, and it must never be able to abort the
+# run before the self-test above has spoken.
+for tool in $(python3 -c '
+import json, pathlib
+cfg = {}
+p = pathlib.Path(".claude/harness.json")
+if p.is_file():
+    try: cfg = json.loads(p.read_text(encoding="utf-8"))
+    except Exception: pass
+print(" ".join(t for t in cfg.get("requires", ["python3", "uv"]) if t not in ("python3", "uv")))
+'); do
+  need "$tool" "$(hint_for "$tool")"
+done
+
+if python3 -c '
+import json,pathlib,sys
+p=pathlib.Path(".claude/harness.json")
+cfg=json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+sys.exit(0 if "docker" in cfg.get("requires",[]) else 1)'; then
+  docker info >/dev/null 2>&1 || {
+    echo "FAIL: the Docker daemon is not running."
+    echo "      Integration tests use testcontainers and will fail at the first fixture."
+    exit 1
+  }
+  echo "  ok   docker daemon"
+fi
+
+if python3 -c '
+import json,pathlib,sys
+p=pathlib.Path(".claude/harness.json")
+cfg=json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+sys.exit(0 if "gh" in cfg.get("requires",[]) else 1)'; then
+  gh auth status >/dev/null 2>&1 || { echo "FAIL: gh is not authenticated. Run: gh auth login"; exit 1; }
+  echo "  ok   gh authenticated"
+fi
 
 echo
 echo "=== Project suites ==="

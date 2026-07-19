@@ -13,6 +13,8 @@ Subcommands
     status    Render the dashboard to stdout and to PROGRESS.md.
     stats     Attribute token usage to each subagent from the session transcript.
     handoff   Write HANDOFF.md: next action, blockers, where each project stands.
+    lessons   One line per live lesson. Read this, then open only the ones that apply.
+    adrs      One line per accepted ADR. Superseded ones are history, not guidance.
 """
 
 from __future__ import annotations
@@ -631,6 +633,116 @@ def cmd_handoff() -> None:
     print(doc)
 
 
+# ------------------------------------------------------- reference documents
+#
+# ADRs and lessons are reference material: they earn their keep only when the agent who needs one
+# actually reads it, and they cost context only when opened. Both of those point at the same
+# mechanism — an index cheap enough to read every time, entries opened on match.
+#
+# That is also what keeps the set from growing without bound. Compaction here is not shorter
+# prose, which saves nothing if nobody reads the file and everything if everybody reads all of
+# it. It is retirement: a lesson whose failure mode is now blocked by a gate probe, a test or a
+# lint rule is marked `mechanised` and drops out of the index, because the check has become the
+# lesson. A superseded ADR drops out for the same reason — it is history, and history that
+# presents itself as guidance is worse than no record at all.
+
+FIELD_RE = re.compile(r"^\s*(?:[-*]\s*)?\*\*(?P<key>[A-Za-z ]+):\*\*\s*(?P<value>.*?)\s*$", re.M)
+
+
+def doc_fields(text: str) -> dict[str, str]:
+    """The `**Key:** value` lines a lesson or ADR carries near the top.
+
+    Tolerant of the leading `- ` that some of the existing ADRs use and others do not; a parser
+    that silently returned nothing for half the corpus would quietly hide those documents from
+    every index that depends on it.
+    """
+    return {m.group("key").strip().lower(): m.group("value").strip() for m in FIELD_RE.finditer(text)}
+
+
+def doc_title(text: str, fallback: str) -> str:
+    for line in text.splitlines():
+        if line.startswith("# "):
+            # The number is already the first column of the index; repeating it in the title
+            # costs width that the trigger line needs more.
+            return re.sub(r"^(?:Lesson|ADR)[- ]\d+:\s*", "", line[2:].strip())
+    return fallback
+
+
+def one_line(text: str, width: int = 96) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def read_index(directory: Path, summary_key: str) -> list[tuple[str, str, str, dict]]:
+    entries = []
+    if not directory.is_dir():
+        return entries
+    for path in sorted(directory.glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        fields = doc_fields(text)
+        entries.append((path.name, doc_title(text, path.stem), fields.get(summary_key, ""), fields))
+    return entries
+
+
+def cmd_lessons(show_all: bool) -> None:
+    directory = ROOT / "docs" / "lessons"
+    entries = read_index(directory, "trigger")
+    if not entries:
+        print("No lessons recorded yet. docs/lessons/0000-how-to-write-one.md sets the bar.")
+        return
+
+    live, retired = [], []
+    for name, title, trigger, fields in entries:
+        if name.startswith("0000"):
+            continue
+        (retired if fields.get("status", "active").lower() == "mechanised" else live).append(
+            (name, title, trigger, fields)
+        )
+
+    if not live and not retired:
+        # 0000 is the guide, not a lesson, so a repo carrying only that has recorded nothing yet.
+        print("No lessons recorded yet. docs/lessons/0000-how-to-write-one.md sets the bar.")
+        return
+
+    print(f"Lessons — {len(live)} live, {len(retired)} mechanised. Open only what applies.\n")
+    for name, title, trigger, _ in live:
+        print(f"  {name[:4]}  {title}")
+        if trigger:
+            print(f"        {one_line(trigger)}")
+    if retired:
+        print(f"\n  {len(retired)} retired — the failure mode is now blocked by a check, so the check")
+        print("  is the lesson. `lessons --all` lists them.")
+        if show_all:
+            print()
+            for name, title, _, fields in retired:
+                print(f"  {name[:4]}  {title}")
+                print(f"        mechanised by: {one_line(fields.get('enforced by', 'unrecorded'))}")
+    print(f"\n  Full text: {directory.as_posix()}/<file>")
+
+
+def cmd_adrs(show_all: bool) -> None:
+    directory = ROOT / "docs" / "adr"
+    entries = [e for e in read_index(directory, "date") if not e[0].startswith("0000")]
+    if not entries:
+        print("No ADRs recorded yet. docs/adr/0000-template.md is the template.")
+        return
+
+    accepted, superseded = [], []
+    for name, title, _, fields in entries:
+        status = fields.get("status", "accepted").lower()
+        (superseded if status.startswith("superseded") else accepted).append((name, title, status))
+
+    print(f"ADRs — {len(accepted)} accepted, {len(superseded)} superseded.\n")
+    for name, title, _ in accepted:
+        print(f"  {name[:4]}  {title}")
+    if superseded:
+        print(f"\n  {len(superseded)} superseded — history, not guidance.")
+        if show_all:
+            for name, title, status in superseded:
+                print(f"  {name[:4]}  {title}  ({status})")
+    print(f"\n  Full text: {directory.as_posix()}/<file>")
+
+
 def cmd_stats(write: bool) -> None:
     # Run as a SubagentStop hook, stdin carries the session's transcript_path. Run by hand, it doesn't.
     payload = None
@@ -678,6 +790,10 @@ def main() -> None:
         cmd_stats("--write" in args)
     elif cmd == "handoff":
         cmd_handoff()
+    elif cmd == "lessons":
+        cmd_lessons("--all" in args)
+    elif cmd == "adrs":
+        cmd_adrs("--all" in args)
     else:
         sys.exit(f"unknown subcommand: {cmd}")
 

@@ -1,0 +1,12 @@
+# These files are vendored into the repos this plugin scaffolds, and those repos travel to
+# machines that are not this one. A scaffold performed on Windows must not commit CRLF shell
+# scripts that die with `$'\r': command not found` the first time CI runs them on Linux.
+#
+# This governs the working copy on the *installing* machine, which is the copy shutil.copy2
+# hands to the target. It does not retroactively fix blobs already committed with CRLF —
+# that took one `git add --renormalize .`.
+*.sh    text eol=lf
+*.tmpl  text eol=lf
+*.py    text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf

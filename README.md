@@ -12,8 +12,9 @@ The rule it enforces is one line — *no production code without a failing test 
 | `.claude/harness.json` | the only project-specific config: owner, guarded paths, runner definitions |
 | `.claude/cycles/<p>.json` | the ordered TDD cycles per project, with each project's runner and coverage gate |
 | `init.sh` | one command that proves the gate still blocks, then runs every scaffolded suite |
+| `.claude/.harness-version` | which build of the plugin last re-synced this repo |
 | `CLAUDE.md`, `CONTEXT.md` | the constitution and the domain glossary |
-| `docs/PLAYBOOK.md`, `docs/adr/`, `docs/LESSONS.md` | how to run it, why it is shaped this way, what went wrong before |
+| `docs/PLAYBOOK.md`, `docs/adr/`, `docs/lessons/` | how to run it, why it is shaped this way, what went wrong before |
 | agents | `tdd-implementer`, `cycle-reviewer`, `project-auditor`, `reconcile-auditor` |
 | commands | `/harness-init`, `/harness-build`, `/harness-status`, `/harness-continue` |
 
@@ -47,7 +48,18 @@ python3 scripts/harness_init.py --target /path/to/repo --owner alice \
   --purpose "Three services and a console behind one operator login."
 ```
 
-Non-destructive: existing files are reported and skipped. `.claude/settings.json` and `.gitignore` are **merged**, not replaced.
+## Upgrading an installed repo
+
+Run `/harness-init` again. The installer splits every file it writes into two sets and treats them differently, which is what makes a second run safe *and* useful:
+
+| | |
+|---|---|
+| **harness-owned** — `.claude/scripts/`, `.claude/harness-tests/`, `init.sh`, `docs/PLAYBOOK.md`, the shipped ADRs | rewritten every run, so a plugin fix actually reaches the repo |
+| **repo-owned** — `CLAUDE.md`, `CONTEXT.md`, `.claude/harness.json`, `.claude/cycles/`, `docs/lessons/` | never rewritten. `--reset <path>` overwrites one, named exactly |
+
+`.claude/settings.json` and `.gitignore` are **merged**, not replaced. `.claude/.harness-version` records which build last re-synced the repo — compare it with `/plugin list` to see whether a repo is carrying an old gate.
+
+The blanket `--force` is gone. It was the only way to update a vendored `harness.py`, and it took the constitution, the glossary and the cycle list with it — see [lesson 0005](docs/lessons/0005-vendored-code-needs-a-re-sync-path.md).
 
 ## How the gate works
 
@@ -99,6 +111,21 @@ A trailing `/` in `guarded` means "this directory and everything under it"; anyt
 
 `init.sh` generates its self-test probes from `guarded`, so widening the gate widens the check that proves it works.
 
+## Reference documents
+
+Lessons and ADRs are reference material, and reference material only earns its keep when the agent who needs one actually reads it. Both are read through an index rather than loaded:
+
+```
+harness.py lessons     # one line per live lesson: number, claim, and the trigger that says when it bites
+harness.py adrs        # one line per accepted ADR; superseded ones are history, not guidance
+```
+
+The full text of an entry is opened only when its trigger matches the work in hand, so the archive costs context in proportion to what is relevant, not to how long the project has run.
+
+That leaves the index itself as the thing that grows, and the answer to that is retirement rather than shorter prose. When a lesson's failure mode has been made mechanically impossible — a gate probe, a test, a lint rule — it is marked `**Status:** mechanised` with the check named in `**Enforced by:**`, and it drops out of the index. **The check is the lesson now.** The prose stays as the reason the check exists, for whoever finds that check inconvenient later.
+
+Three of the six lessons in this repo are already retired that way.
+
 ## What this does not prove
 
 The gate proves **ordering**: a test existed and failed before the code did. It does not prove the test is any good. An `ImportError` counts as RED, and a test that asserts nothing passes the gate exactly like a test that asserts everything.
@@ -115,7 +142,9 @@ Neither mechanism is sufficient alone. A repo that trusts only the gate has auto
 uv run --with pytest python -m pytest tests/ -q
 ```
 
-The suite drives `harness.py` itself — the gate's block/allow decisions, the handoff's refusal to declare done over its own blockers, UTF-8 pinning on every read and write, and the config layer's guarantee that the defaults still compile to the patterns the hardcoded constants used to hold.
+The suite drives `harness.py` itself — the gate's block/allow decisions, the handoff's refusal to declare done over its own blockers, UTF-8 pinning on every read and write, and the config layer's guarantee that the defaults still compile to the patterns the hardcoded constants used to hold — plus `test_install.py`, which installs *twice* and asserts that the second run re-syncs the harness and leaves your content alone.
+
+`harness.py` resolves the repo root from `CLAUDE_PROJECT_DIR`, falling back to two levels above itself (it normally lives at `.claude/scripts/`). To run a command against this checkout: `CLAUDE_PROJECT_DIR=$PWD python3 scripts/harness.py lessons`.
 
 ## Releasing
 
@@ -130,7 +159,7 @@ So for any change to behaviour:
 
 Docs-only changes do not need a bump — they never reach a running session either way.
 
-Step 4 is not paranoia. It is what caught three fixes that had been pushed, reported green, and reached nobody. See [docs/LESSONS.md](docs/LESSONS.md).
+Step 4 is not paranoia. It is what caught three fixes that had been pushed, reported green, and reached nobody. See [docs/lessons/](docs/lessons/).
 
 ## License
 

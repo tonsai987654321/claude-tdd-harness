@@ -4,8 +4,8 @@
   "owner": "{{OWNER}}",
   "projects_dir": "projects",
 
-  "_requires": "Tools init.sh insists on before it will pass. Drop \"docker\" if nothing here uses testcontainers; drop \"gh\" if the project repos are public or vendored.",
-  "requires": ["python3", "uv", "docker", "gh"],
+  "_requires": "Tools the PROJECT suites need, checked by init.sh just before it runs them. Derived from the runners you scaffolded with; add \"docker\" if a project uses testcontainers, \"gh\" if init.sh should insist on an authenticated CLI. The harness's own prerequisites are not listed here — init.sh checks python3 and uv itself, so that a missing project tool can never stop the gate self-test from running.",
+  "requires": {{REQUIRES}},
 
   "_guarded": "Production code. A trailing slash means the directory and everything under it; anything else is an exact filename. Naming this key REPLACES the default set rather than adding to it.",
   "guarded": ["app/", "src/", "alembic/versions/", "alembic/env.py"],

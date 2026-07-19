@@ -10,7 +10,7 @@ Work out these four things. Ask the user only for what you genuinely cannot dete
 
 1. **Owner** — the git host account that owns the project repos (`link_projects.sh` clones `<owner>/<project>`). If `gh auth status` names an account and the user has not said otherwise, use it and say so.
 2. **Projects** — the names of the projects this harness will build, each with a runner and a coverage gate. If the user has not named them, ask; do not invent projects.
-3. **Runner per project** — `pytest` or `vitest` out of the box. Anything else needs a new entry in `.claude/harness.json`; see the "Adding a runner" section of `docs/PLAYBOOK.md`.
+3. **Runner per project** — `pytest` or `vitest`. The installer rejects anything else rather than scaffolding a cycle file that is fatal at the first `red`; a new runner needs an entry in `.claude/harness.json` first, see the "Adding a runner" section of `docs/PLAYBOOK.md`.
 4. **Purpose** — one paragraph on what these projects are and who reads them. It becomes the opening of `CLAUDE.md` and it is what stops a later session inventing scope.
 
 If the repo already has a `.claude/settings.json`, say so before running. The installer merges into it rather than replacing it, but the user should know their config is being touched.
@@ -26,9 +26,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/harness_init.py" \
   --purpose "<one paragraph>"
 ```
 
-It is non-destructive: existing files are reported and skipped, never overwritten. `--force` overwrites, and you should only reach for it when the user has asked to reset a scaffolded file.
+Run it again on a repo that already has the harness and it **re-syncs**: harness-owned files (`.claude/scripts/`, `.claude/harness-tests/`, `init.sh`, `docs/PLAYBOOK.md`) are rewritten from the plugin so a fix actually lands, and repo-owned files (`CLAUDE.md`, `CONTEXT.md`, `.claude/harness.json`, the cycle files, `docs/lessons/`) are never touched. `--reset <path>` overwrites one repo-owned file, named exactly; there is no blanket overwrite, because the one that used to exist took the user's constitution and cycle list with it.
 
-Read the report it prints. The `==` lines are files it left alone — if one of those is `CLAUDE.md`, the repo already had a constitution and the user needs to decide whether to merge the harness sections in by hand.
+Read the report it prints. `++` is new, `~~` was re-synced from the plugin, `==` is yours and was left alone — if one of those is `CLAUDE.md`, the repo already had a constitution and the user needs to decide whether to merge the harness sections in by hand.
 
 ## Prove it works before you claim it does
 
@@ -38,7 +38,9 @@ Read the report it prints. The `==` lines are files it left alone — if one of 
 
 This is the whole point. `init.sh` generates a gate probe for every guarded path in the config and asserts the hook blocks each one, plus asserts it *allows* tests and config. **Do not report a successful install without pasting what this printed.** A gate that has quietly stopped blocking looks exactly like a gate that works, right up until it matters.
 
-If `init.sh` fails on a missing tool, the fix is usually `requires` in `.claude/harness.json` — a harness with no containerised tests should not insist on Docker.
+`requires` in `.claude/harness.json` is derived from the runners you chose, and it lists only what the *project suites* need. It cannot block the gate self-test: that runs first, on `python3` and `uv` alone. If `init.sh` fails there, the gate itself is broken and nothing else matters yet.
+
+If it reports no PreToolUse gate hook, stop. The probe reads the command out of `.claude/settings.json` and runs *that*, so this failure means the editor would write to production code unguarded — not that the check is fussy.
 
 ## Then hand over
 

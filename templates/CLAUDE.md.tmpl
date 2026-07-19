@@ -20,7 +20,8 @@ Before writing code:
 1. Run `./init.sh`. It checks the environment, proves the TDD gate still blocks, and runs every scaffolded project's suite. **If it fails, repair that before adding scope** — a harness on a broken baseline just makes the breakage restartable.
 2. Read this file.
 3. Read `HANDOFF.md` for the next action, and `PROGRESS.md` for the board.
-4. `git log --oneline -5` in the project you're about to touch.
+4. Run `python3 .claude/scripts/harness.py lessons`. It is an index, not the archive — open only the entries whose trigger matches what you are about to do. A lesson nobody reads is a lesson nobody learned.
+5. `git log --oneline -5` in the project you're about to touch.
 
 ## End of session
 
@@ -48,15 +49,19 @@ So when any of these happen, the work is not finished until it is recorded:
 
 | What happened | Where it goes |
 |---|---|
-| A green suite was wrong — the bug was real and the tests still passed | `docs/LESSONS.md` |
-| The tool did the opposite of what its docs led you to expect | `docs/LESSONS.md` |
-| A stated assumption in a comment or doc turned out false | `docs/LESSONS.md`, **and fix the comment** |
+| A green suite was wrong — the bug was real and the tests still passed | a new `docs/lessons/NNNN-*.md` |
+| The tool did the opposite of what its docs led you to expect | a new lesson |
+| A stated assumption in a comment or doc turned out false | a new lesson, **and fix the comment** |
 | The fix sets a rule for code not written yet | an **ADR** (+ the lesson that forced it) |
 | A lesson contradicts an accepted ADR | the lesson **and** supersede that ADR |
 
-The bar for a lesson is in `docs/LESSONS.md`: it must change what someone does next time. Not a diary, not a changelog. Write the **surprise** — what you expected versus what happened — because that is the part that transfers; a lesson that only records the fix is a changelog entry.
+The bar and the file shape are in `docs/lessons/0000-how-to-write-one.md`: it must change what someone does next time. Not a diary, not a changelog. Write the **surprise** — what you expected versus what happened — because that is the part that transfers; a lesson that only records the fix is a changelog entry.
 
 An ADR is for a decision that is hard to reverse. A one-line escape fix is not — that is a lesson.
+
+**Retire a lesson the moment it becomes a check.** When a lesson's failure mode is blocked by a gate probe, a test, or a lint rule, set `**Status:** mechanised` and name the check in `**Enforced by:**`. It leaves the index and stops competing for attention, because the check is now the lesson. The prose stays as the reason the check exists.
+
+This is also how the record stays affordable. Lessons and ADRs are read through an index — `harness.py lessons`, `harness.py adrs` — one line each, full text opened only on a match. Nothing here is loaded wholesale, so the cost of the archive is the length of the index, and retirement is what keeps that short.
 
 Two failure modes this exists to prevent:
 
@@ -79,8 +84,8 @@ brief/                      the specs — the contract, read fully before coding
 .claude/cycles/*.json       the ordered TDD cycles per project, lifted from each brief
 .claude/state/*.json        gate state, coverage, cycle progress, evidence (machine-written)
 .claude/scripts/harness.py  gate hook, red/green, cycle tracking, token accounting, handoff
-docs/adr/                   decisions that were hard to reverse
-docs/LESSONS.md             what we learned the expensive way
+docs/adr/                   decisions that were hard to reverse (index: harness.py adrs)
+docs/lessons/               what we learned the expensive way (index: harness.py lessons)
 CONTEXT.md                  domain glossary — the words the code must use
 PROGRESS.md                 generated dashboard; never hand-edit
 HANDOFF.md                  generated next-action for the next session; never hand-edit
@@ -97,6 +102,7 @@ HANDOFF.md                  generated next-action for the next session; never ha
 | `harness.py green <project>` | run the suite, shut the gate, record coverage |
 | `harness.py cycle <p> <id> done --evidence "…"` | close a cycle; refuses without evidence |
 | `harness.py handoff` | write `HANDOFF.md` for the next session |
+| `harness.py lessons` / `adrs` | the reference index — read before dispatching, open only what applies |
 
 ## Stack — fixed by the briefs, not open for improvement
 

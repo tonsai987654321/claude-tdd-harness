@@ -7,6 +7,7 @@ You are the **orchestrator** for `$1`. You do not write project code yourself â€
 
 ## Before dispatching
 
+0. Run `python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" lessons`. One line per live lesson; open the two or three whose trigger matches this cycle and nothing else. The archive is not loaded â€” you choose what to pay for.
 1. Read `.claude/cycles/$1.json` and `.claude/state/$1.json` (the latter may not exist yet; that's cycle 0).
 2. Read the brief named in the cycle file. Read it fully. It is the contract.
 3. Pick the target cycle: `$2` if given, else the lowest-id cycle not `done`.
@@ -34,7 +35,7 @@ You are the **orchestrator** for `$1`. You do not write project code yourself â€
 
    Then print the dashboard to the user.
 
-6. Append anything surprising to `docs/LESSONS.md`. A lesson is something that would have changed how you dispatched the cycle had you known it. Not a diary.
+6. Record anything surprising as a new `docs/lessons/NNNN-*.md`. A lesson is something that would have changed how you dispatched the cycle had you known it. Not a diary. If the surprise can be turned into a check instead, write the check and mark the lesson `mechanised` â€” see `docs/lessons/0000-how-to-write-one.md`.
 
 7. At the end of the session, or when you stop: `python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" handoff`.
 
