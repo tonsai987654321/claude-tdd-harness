@@ -18,6 +18,7 @@ Subcommands
     handoff   Write HANDOFF.md: next action, blockers, where each project stands.
     lessons   One line per live lesson. Read this, then open only the ones that apply.
     adrs      One line per accepted ADR. Superseded ones are history, not guidance.
+    version   Which plugin version this .claude/ came from, and whether it is behind.
 """
 
 from __future__ import annotations
@@ -1290,6 +1291,57 @@ def cmd_stats(write: bool) -> None:
 # ---------------------------------------------------------------- entry
 
 
+def installed_plugin_version() -> str | None:
+    """The version of the tdd-harness plugin installed on this machine, if there is one.
+
+    `None` means no plugin was found, which is not the same as being behind: a clone on a machine
+    that never installed the plugin is unmanaged, and warning it about drift it cannot act on is how
+    a warning becomes noise people learn to skip.
+    """
+    candidates = []
+    if root := os.environ.get("CLAUDE_PLUGIN_ROOT"):
+        candidates.append(Path(root) / ".claude-plugin" / "plugin.json")
+    candidates += sorted(
+        (Path.home() / ".claude" / "plugins" / "cache").glob("*/tdd-harness/*/.claude-plugin/plugin.json")
+    )
+    for manifest in candidates:
+        try:
+            return str(json.loads(manifest.read_text(encoding="utf-8"))["version"])
+        except (OSError, KeyError, ValueError):
+            continue
+    return None
+
+
+def cmd_version() -> None:
+    """Report the plugin version this repo's `.claude/` came from, and whether it is behind.
+
+    `harness_init.py` has written `.claude/.harness-version` for some time; nothing ever read it, so
+    a vendored copy hundreds of lines behind the plugin looked exactly like a current one. The
+    stamp only stops drift being invisible once something compares it.
+
+    Never an error. The vendored copy is allowed to be a fork — this repo's was, carrying a local
+    addition the plugin lacks — and the point is that the fork is *stated* rather than discovered by
+    diffing after an update.
+    """
+    stamp_file = ROOT / ".claude" / ".harness-version"
+    stamped = None
+    if stamp_file.exists():
+        lines = [ln.strip() for ln in stamp_file.read_text(encoding="utf-8").splitlines()]
+        stamped = next((ln for ln in lines if ln and not ln.startswith("#")), None)
+
+    installed = installed_plugin_version()
+    print(f"vendored .claude/ : {stamped or 'unstamped (predates version stamping)'}")
+    print(f"installed plugin  : {installed or 'not found on this machine'}")
+
+    if stamped and installed and stamped != installed:
+        print(
+            f"\n!! This repo's .claude/ came from tdd-harness {stamped}; {installed} is installed.\n"
+            f"   The vendored gate and scripts are whatever {stamped} shipped, so a fix made since "
+            f"then is not running here.\n"
+            f"   Re-sync with /harness-init, or keep the fork deliberately — but knowing it is one."
+        )
+
+
 def require_known_project(project: str) -> None:
     """Refuse an unknown project by name, and say which ones exist.
 
@@ -1364,6 +1416,8 @@ def main() -> None:
         cmd_lessons("--all" in args)
     elif cmd == "adrs":
         cmd_adrs("--all" in args)
+    elif cmd == "version":
+        cmd_version()
     else:
         sys.exit(f"unknown subcommand: {cmd}")
 
