@@ -187,6 +187,13 @@ rows += [
     (f"{base}/tests/test_probe.py", 0, "gate allows tests/"),
     (f"{base}/README.md", 0, "gate allows docs"),
 ]
+
+# The harness's own machinery, refused whatever the gate says. Probed from the config so that
+# widening `protected` widens this check too — and probed at all because the hole it closes was
+# invisible: gate state is gitignored, so opening the gate by hand left no trace anywhere.
+for entry in cfg.get("protected", [".claude/state/", ".claude/scripts/", ".claude/settings.json"]):
+    sample = f"{entry}probe.json" if entry.endswith("/") else entry
+    rows.append((sample, 2, f"gate refuses {entry} — the harness itself"))
 if "alembic/env.py" in guarded:
     rows.append((f"{base}/alembic.ini", 0, "gate allows alembic config"))
 if "src/" in guarded:

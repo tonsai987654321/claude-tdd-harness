@@ -66,6 +66,8 @@ def known_runners(root: Path) -> tuple[str, ...]:
     except (OSError, KeyError, TypeError, json.JSONDecodeError):
         return TEMPLATE_RUNNERS
     return names or TEMPLATE_RUNNERS
+
+
 NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 # Tests that drive the installer rather than the gate. They stay in the plugin: the installer is
@@ -245,7 +247,7 @@ def derive_requires(projects: list[Project]) -> list[str]:
 # schema the config predates. harness.py fills gaps in a *known* runner from its own defaults, so
 # nothing breaks; this note exists because a silently-defaulted key is still a key the user never
 # chose, and they should know which decisions were made for them.
-CONFIG_KEYS = ("stack",)
+CONFIG_KEYS = ("stack", "protected")
 RUNNER_KEYS = ("quality",)
 
 

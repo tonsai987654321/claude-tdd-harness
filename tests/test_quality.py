@@ -253,3 +253,101 @@ def test_coverage_that_was_never_measured_does_not_block(tmp_path: Path) -> None
     when you are allowed to have measured something, which is not what it is for — and the
     evidence rule already stands between an unmeasured cycle and a silent `done`."""
     assert close(cycle_repo(tmp_path, gate=90, coverage=None)).returncode == 0
+
+
+# ------------------------------------------------------------------ evidence against git
+
+
+def red_repo(tmp_path: Path, commit_test: bool, git_repo: bool = True) -> Path:
+    """A project that has been through red and green, with the test committed or not."""
+    (tmp_path / ".claude" / "cycles").mkdir(parents=True)
+    (tmp_path / ".claude" / "state").mkdir()
+    (tmp_path / ".claude" / "cycles" / "widget.json").write_text(json.dumps({
+        "project": "widget", "runner": "pytest", "cycles": [{"id": 1, "title": "a behaviour"}],
+    }), encoding="utf-8")
+    (tmp_path / ".claude" / "harness.json").write_text(
+        json.dumps({"projects_dir": "projects", "runners": {"pytest": {"cmd": ["x"], "red_exit_codes": [1]}}}),
+        encoding="utf-8")
+    (tmp_path / ".claude" / "state" / "widget.json").write_text(json.dumps({
+        "project": "widget", "gate": {"state": "SHUT"}, "coverage": None,
+        "last_red_test": ["tests/test_thing.py"],
+        "cycles": [{"id": 1, "title": "a behaviour", "state": "green", "agent": "-",
+                    "tokens": 0, "evidence": ""}],
+    }), encoding="utf-8")
+
+    repo = tmp_path / "projects" / "widget"
+    (repo / "tests").mkdir(parents=True)
+    if not git_repo:
+        return tmp_path
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, capture_output=True)
+    (repo / "tests" / "test_thing.py").write_text("def test_thing(): assert True\n", encoding="utf-8")
+    if commit_test:
+        subprocess.run(["git", "-C", str(repo), "add", "tests"], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@e",
+         "commit", "-q", "--allow-empty", "-m", "test(1): the behaviour [RED]"],
+        check=True, capture_output=True)
+    return tmp_path
+
+
+def test_a_cycle_whose_test_was_never_committed_cannot_be_closed(tmp_path: Path) -> None:
+    """Evidence used to be prose: it asked for two SHAs and believed whatever it was handed.
+
+    This asks git. It cannot tell a good test from `assert False` — nothing here can — but it
+    moves the cost of a fake one from "one line, invisible" to "one line, committed, sitting in
+    the diff a reviewer reads".
+    """
+    proc = close(red_repo(tmp_path, commit_test=False))
+    assert proc.returncode != 0
+    assert "test_thing.py" in proc.stdout + proc.stderr
+
+
+def test_a_cycle_whose_test_is_in_the_history_closes(tmp_path: Path) -> None:
+    assert close(red_repo(tmp_path, commit_test=True)).returncode == 0
+
+
+def test_a_project_with_no_history_cannot_claim_two_shas(tmp_path: Path) -> None:
+    # Built without git rather than by deleting .git: on Windows its object files are read-only
+    # and rmtree raises PermissionError, which would make this test about the fixture.
+    proc = close(red_repo(tmp_path, commit_test=False, git_repo=False))
+    assert proc.returncode != 0
+    assert "no git history" in proc.stdout + proc.stderr
+
+
+def test_a_cycle_with_no_recorded_test_is_not_held_to_it(tmp_path: Path) -> None:
+    """Cycle 0 is scaffolding and opens no gate, so there is no test to look for. Refusing there
+    would make this a rule about having run red, which is not what it is for."""
+    root = red_repo(tmp_path, commit_test=False)
+    state = root / ".claude" / "state" / "widget.json"
+    body = json.loads(state.read_text(encoding="utf-8"))
+    del body["last_red_test"]
+    state.write_text(json.dumps(body), encoding="utf-8")
+
+    assert close(root).returncode == 0
+
+
+def test_a_config_predating_protected_still_guards_the_harness(tmp_path: Path) -> None:
+    """`protected` is a top-level key, so a config written before it existed inherits the default
+    through the shallow merge — unlike `quality`, which lives inside `runners` and was shadowed
+    wholesale. Checked rather than assumed, because that difference is exactly lesson 0008.
+    """
+    (tmp_path / ".claude" / "scripts").mkdir(parents=True)
+    (tmp_path / ".claude" / "state").mkdir()
+    (tmp_path / ".claude" / "cycles").mkdir()
+    harness = Path(__file__).resolve().parents[1] / "scripts" / "harness.py"
+    (tmp_path / ".claude" / "scripts" / "harness.py").write_text(
+        harness.read_text(encoding="utf-8"), encoding="utf-8")
+    # A pre-0.5.0 config: no "protected" anywhere.
+    (tmp_path / ".claude" / "harness.json").write_text(
+        json.dumps({"projects_dir": "projects", "guarded": ["app/"]}), encoding="utf-8")
+    (tmp_path / ".claude" / "state" / "widget.json").write_text(
+        json.dumps({"project": "widget", "gate": {"state": "OPEN"}, "coverage": None, "cycles": []}),
+        encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, str(tmp_path / ".claude" / "scripts" / "harness.py"), "gate"],
+        input=json.dumps({"tool_input": {"file_path": str(tmp_path / ".claude/state/widget.json")}}),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(tmp_path)},
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr

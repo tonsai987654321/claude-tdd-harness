@@ -143,15 +143,46 @@ That leaves the index itself as the thing that grows, and the answer to that is 
 
 `harness.py lessons` prints the split; most of this repo's own lessons are already retired that way.
 
+## What enforces what
+
+Two different things get called "mechanical", and only one of them fires on its own.
+
+**Enforced by the harness, whether or not anyone is watching:**
+
+| | |
+|---|---|
+| a write to production code while the gate is SHUT | `PreToolUse` hook, exit 2 |
+| a write to `.claude/state/`, `.claude/scripts/`, `.claude/settings.json` | refused always — an open gate does not open these |
+| `red` on a test that passes, or on a run that never happened | refused |
+| `cycle … done` with no evidence | refused |
+| `cycle … done` below the project's `coverage_gate` | refused |
+| `cycle … done` when the test that opened the gate is in no commit | refused |
+
+**Checked only when someone runs `./init.sh`:**
+
+| | |
+|---|---|
+| the gate still blocks every guarded path | gate probes, through the wired hook command |
+| the harness's own suite is green | vendored tests |
+| `done` cycles recorded before those refusals existed | state scan |
+| the project's own suite and quality gates | per cycle file |
+
+The second list is a *strong prior* — `CLAUDE.md` instructs it, nothing compels it. That is exactly
+the distinction this plugin exists to draw, so it would be dishonest to blur it here. Run `init.sh`.
+
 ## What this does not prove
 
 The gate proves **ordering**: a test existed and failed before the code did. It does not prove the test is any good. An `ImportError` counts as RED, and a test that asserts nothing passes the gate exactly like a test that asserts everything.
+
+It is also **per-project, not per-file**. One failing test opens every guarded path in that project until `green`, so a cycle can touch code the test says nothing about. Narrowing that would mean deciding which files a test covers, which is language-specific static analysis and would cost the config-driven genericity that lets this run against `gotest` or `cargo`. The trade was made deliberately; `cycle … done` requiring the test to be in the history is what raises the cost of an `assert False` from invisible to reviewable.
 
 That gap is why the harness ships a reviewer agent and an evidence rule, and why `harness.py cycle <p> <id> done` refuses without evidence — what ran, what it printed, and the two commit SHAs. A completion nobody can check is indistinguishable from a lie. It refuses below the project's `coverage_gate` too, and `init.sh` fails on any `done` cycle that predates that check.
 
 Neither mechanism is sufficient alone. A repo that trusts only the gate has automated the appearance of the discipline.
 
-`HARNESS_GATE_BYPASS=1` exists so that a gate nobody can override does not become a hook somebody deletes. It prints to stderr and lands in the transcript. Using it to save time is the single way to make the whole thing worthless.
+`HARNESS_GATE_BYPASS=1` exists so that a gate nobody can override does not become a hook somebody deletes. It prints to stderr and lands in the transcript, and a bypassed write to the harness's own machinery says `PROTECTED` when it does. Using it to save time is the single way to make the whole thing worthless.
+
+That is the design: **one loud door, and no quiet ones.** The quiet ones were real — `.claude/state/` is gitignored, and writing `{"gate": {"state": "OPEN"}}` into it used to open the gate with no test run and no trace anywhere. Nothing at the harness root could be guarded, because every `guarded` pattern is forced to begin with `<projects_dir>/<project>/`. `protected` in `.claude/harness.json` is the answer, and it answers to no gate state.
 
 ## Development
 

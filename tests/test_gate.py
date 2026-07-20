@@ -81,3 +81,89 @@ def test_gate_leaves_alembic_config_alone(gated_root: Path) -> None:
     proc = run_gate(gated_root, "projects/demo-api/alembic.ini")
 
     assert proc.returncode == ALLOWED, f"exit {proc.returncode}: {proc.stdout}{proc.stderr}"
+
+
+# ------------------------------------------------------------------ guarding the guard
+
+
+def _probe(root, rel):
+    """Ask the real gate about one path, the way Claude Code does."""
+    import json as _json
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+
+    harness = root / ".claude" / "scripts" / "harness.py"
+    payload = _json.dumps({"tool_input": {"file_path": str(root / rel)}})
+    return _sp.run(
+        [_sys.executable, str(harness), "gate"],
+        input=payload, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env={**_os.environ, "CLAUDE_PROJECT_DIR": str(root)},
+    )
+
+
+def _harness_root(tmp_path, gate_state="SHUT"):
+    import json as _json
+    import shutil as _shutil
+
+    src = Path(__file__).resolve().parents[1] / "scripts" / "harness.py"
+    (tmp_path / ".claude" / "scripts").mkdir(parents=True)
+    _shutil.copy2(src, tmp_path / ".claude" / "scripts" / "harness.py")
+    (tmp_path / ".claude" / "cycles").mkdir()
+    (tmp_path / ".claude" / "state").mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".claude" / "cycles" / "api.json").write_text(
+        _json.dumps({"project": "api", "runner": "pytest", "cycles": []}), encoding="utf-8"
+    )
+    (tmp_path / ".claude" / "state" / "api.json").write_text(
+        _json.dumps({"project": "api", "gate": {"state": gate_state}, "coverage": None, "cycles": []}),
+        encoding="utf-8",
+    )
+    (tmp_path / "projects" / "api" / "app").mkdir(parents=True)
+    return tmp_path
+
+
+def test_the_gates_own_state_cannot_be_written(tmp_path):
+    """The exploit this closes: `.claude/state/` is gitignored, so writing
+    {"gate": {"state": "OPEN"}} into it opened the gate with no test ever run and left no trace in
+    git. Every `guarded` pattern is forced to start with <projects_dir>/<project>/, so no config
+    could express a harness-root path — the hole was structural, not an oversight.
+    """
+    root = _harness_root(tmp_path)
+    assert _probe(root, ".claude/state/api.json").returncode == 2
+
+
+def test_an_open_gate_does_not_open_the_harness_itself(tmp_path):
+    """A mechanism that can rewrite its own verdict is not a mechanism."""
+    root = _harness_root(tmp_path, gate_state="OPEN")
+    assert _probe(root, "projects/api/app/x.py").returncode == 0, "an open gate must allow app/"
+    for protected in (".claude/state/api.json", ".claude/scripts/harness.py", ".claude/settings.json"):
+        assert _probe(root, protected).returncode == 2, protected
+
+
+def test_committed_config_stays_editable(tmp_path):
+    """The line is auditability, not importance. Cycle files and harness.json are committed and
+    the documented install steps require editing them; blocking those would break the workflow and
+    buy nothing, because lowering a coverage_gate is a visible act in a reviewable diff."""
+    root = _harness_root(tmp_path)
+    assert _probe(root, ".claude/cycles/api.json").returncode == 0
+    assert _probe(root, ".claude/harness.json").returncode == 0
+
+
+def test_the_loud_door_still_opens_the_protected_set(tmp_path):
+    """HARNESS_GATE_BYPASS keeps working here on purpose. The point is not that these are
+    unopenable — it is that opening them says so, instead of looking like nothing happened."""
+    import os as _os
+    import subprocess as _sp
+    import sys as _sys
+    import json as _json
+
+    root = _harness_root(tmp_path)
+    proc = _sp.run(
+        [_sys.executable, str(root / ".claude" / "scripts" / "harness.py"), "gate"],
+        input=_json.dumps({"tool_input": {"file_path": str(root / ".claude/state/api.json")}}),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env={**_os.environ, "CLAUDE_PROJECT_DIR": str(root), "HARNESS_GATE_BYPASS": "1"},
+    )
+    assert proc.returncode == 0
+    assert "PROTECTED" in proc.stderr, "a bypassed write to the machinery must be audible"

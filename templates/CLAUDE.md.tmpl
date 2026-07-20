@@ -11,7 +11,10 @@ This repository is a **harness**, not an application. It builds {{PROJECT_COUNT}
 This is enforced mechanically, not by good intentions. A `PreToolUse` hook blocks every write to a project's shipped code — the paths named in `guarded` in `.claude/harness.json` — until `harness.py red` has run a test and watched it fail. Tests, `__init__.py`, config and CI files are never blocked. See [ADR-0003](docs/adr/0003-mechanical-red-gate.md).
 
 If the gate blocks you, you skipped a step. Write the test.
-`HARNESS_GATE_BYPASS=1` exists for emergencies and appears in the transcript when used. Using it to save time is the single way to make this harness worthless.
+
+The harness's own machinery — `.claude/state/`, `.claude/scripts/`, `.claude/settings.json` — is refused **whatever the gate says**. A mechanism that can rewrite its own verdict is not a mechanism, and gate state is gitignored, so an edit there would leave no trace at all. Cycle files and `harness.json` stay yours to edit: they are committed, so changing one is a visible act in a diff someone reads.
+
+`HARNESS_GATE_BYPASS=1` exists for emergencies and appears in the transcript when used — including a `PROTECTED` line if it was used on the machinery. One loud door, and no quiet ones. Using it to save time is the single way to make this harness worthless.
 
 ## Startup workflow
 
@@ -35,7 +38,7 @@ All five, or it is not done:
 
 - [ ] The behaviour is implemented and the cycle's tests pass
 - [ ] The quality gates actually ran — `harness.py quality <project>`, which runs {{QUALITY_GATES}}
-- [ ] **Evidence recorded** — what ran, what it printed, the `[RED]` and `[GREEN]` SHAs
+- [ ] **Evidence recorded** — what ran, what it printed, the `[RED]` and `[GREEN]` SHAs. `done` checks the second half against git: the test that opened the gate has to be in the history
 - [ ] The repo still starts from `./init.sh`
 - [ ] **Anything surprising is written down** — see below. Nothing surprising happened is a fine answer; "no time" is not.
 

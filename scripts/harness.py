@@ -60,6 +60,20 @@ DEFAULT_CONFIG: dict = {
     # `alembic upgrade head` executes on every container boot — it ships, and it encodes
     # behaviour. `alembic.ini` beside it is config and cannot be driven by a test.
     "guarded": ["app/", "src/", "alembic/versions/", "alembic/env.py"],
+    # The harness's own machinery, relative to the harness root. Refused ALWAYS — an open gate
+    # does not open these, because they are what an open gate is made of.
+    #
+    # The line between this and the config a user edits freely is auditability, not importance.
+    # `.claude/state/` is gitignored, so flipping it to OPEN by hand leaves no trace anywhere; the
+    # gate hook and the wiring in settings.json are how the refusal happens at all, and a quiet
+    # edit to either turns every later green run into a claim about nothing. Those are invisible
+    # or self-referential, so they are shut.
+    #
+    # `.claude/cycles/` and `.claude/harness.json` are deliberately NOT here. Lifting a brief's
+    # cycle list into the cycle file is step two of installing the harness, and both files are
+    # committed — lowering a coverage_gate to dodge it is a visible act in a reviewable diff.
+    # Blocking what is auditable would buy nothing and break the documented workflow.
+    "protected": [".claude/state/", ".claude/scripts/", ".claude/settings.json"],
     # Structural files that cannot be driven by a test. Creating them is not "production code".
     "exempt_names": ["__init__.py"],
     # Test/setup/config/type-decl files. Never production code; never gated, regardless of path —
@@ -284,6 +298,26 @@ def cmd_gate() -> None:
     CONFIG_PATH = root / ".claude" / "harness.json"
     cfg = harness_config()
 
+    # The harness's own machinery, checked before anything else and answerable to no gate state.
+    # Every `guarded` pattern is forced to start with `<projects_dir>/<project>/`, so nothing at
+    # the harness root could ever be expressed there however the config was written — which left
+    # `.claude/state/` writable, and writing `{"gate": {"state": "OPEN"}}` into it opened the gate
+    # with no test ever run and no trace in git, because that directory is gitignored.
+    #
+    # HARNESS_GATE_BYPASS still overrides, deliberately: the point is not that this is unopenable,
+    # it is that opening it says so out loud instead of looking like nothing happened.
+    inside = target.relative_to(root).as_posix()
+    if any(inside.startswith(p) if p.endswith("/") else inside == p for p in cfg["protected"]):
+        if os.environ.get("HARNESS_GATE_BYPASS") == "1":
+            print(f"harness: PROTECTED path written under bypass: {inside}", file=sys.stderr)
+            sys.exit(0)
+        deny(
+            f"BLOCKED: {inside} is part of the harness itself.\n"
+            "  Gate state, the gate script and the hook wiring are refused whatever the gate says —\n"
+            "  a mechanism that can rewrite its own verdict is not a mechanism.\n"
+            "  Cycle files and harness.json are yours to edit; they are committed and reviewable."
+        )
+
     match = next((m for g in guarded_patterns(cfg) if (m := g.search(rel))), None)
     if not match:
         sys.exit(0)
@@ -442,7 +476,13 @@ def cmd_green(project: str) -> None:
 
     coverage = scrape_coverage(spec, out)
     state = load_state(project)
+    # Carry the test that opened this gate past the close. `done` asks git whether it was ever
+    # committed, and without this the only record of which test justified the cycle is erased by
+    # the very command that ends it.
+    opened_with = state.get("gate", {}).get("test") or state.get("last_red_test")
     state["gate"] = {"state": "SHUT", "closed_at": time.time()}
+    if opened_with:
+        state["last_red_test"] = opened_with
     state["coverage"] = coverage
     save_state(project, state)
     print(f"\nGREEN. Gate SHUT for '{project}'. Coverage: {coverage if coverage is not None else '?'}%")
@@ -476,6 +516,32 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
     # Checked here rather than in `green`, alongside the evidence rule and for the same reason:
     # `green` runs many times inside a cycle and coverage climbing to the gate is the normal shape
     # of the work. `done` is where the claim is made.
+    # The evidence rule asks for two commit SHAs and then believes whatever it is handed. This
+    # asks git instead: the test that opened the gate has to exist in the project's history.
+    #
+    # It does not make the test a good one — nothing here can — but it moves the cost of a fake
+    # `assert False` from "one line, invisible" to "one line, committed, and sitting in the diff a
+    # reviewer reads". Git is the one store in this system the harness does not write and an agent
+    # cannot quietly amend without it showing.
+    if new_state == "done":
+        recorded = load_state(project).get("last_red_test") or []
+        test_path = next((str(a) for a in recorded if not str(a).startswith("-")), None)
+        if test_path:
+            if not (project_dir(project) / ".git").is_dir():
+                sys.exit(
+                    f"REFUSED: cycle {cycle_id} claims evidence, but {project} has no git history.\n"
+                    f"  Evidence names a [RED] and a [GREEN] commit; there are none to name.\n"
+                    f"  Commit the failing test and the code, then close the cycle."
+                )
+            if not git(project, "log", "--all", "--format=%H", "--", test_path):
+                sys.exit(
+                    f"REFUSED: cycle {cycle_id} opened the gate with {test_path}, "
+                    f"and no commit in {project} touches it.\n"
+                    f"  The test that justified writing the code was never committed, so the "
+                    f"history does not show the order the gate exists to prove.\n"
+                    f"  Commit it — `test(...): … [RED]` — then close the cycle."
+                )
+
     if new_state == "done":
         gate = project_config(project).get("coverage_gate")
         actual = state.get("coverage")

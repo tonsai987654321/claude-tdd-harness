@@ -1,11 +1,11 @@
 # How the harness works
 
-Five diagrams, each traced from the code rather than from the design. Where the order of two
+Six diagrams, each traced from the code rather than from the design. Where the order of two
 checks matters, the order here is the order in the source.
 
 - [1. The gate](#1-the-gate--pretooluse) — the one mechanism everything else exists to support
 - [2. One TDD cycle](#2-one-tdd-cycle) — how the gate opens and shuts
-- [3. Closing a cycle](#3-closing-a-cycle) — the two refusals
+- [3. Closing a cycle](#3-closing-a-cycle) — the three refusals
 - [4. Install and re-sync](#4-install-and-re-sync) — who owns which file
 - [5. `init.sh`](#5-initsh) — the verification order, which is load-bearing
 
@@ -16,11 +16,13 @@ checks matters, the order here is the order in the source.
 Wired into `.claude/settings.json` as `python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" gate`,
 matching `Write|Edit|MultiEdit|NotebookEdit`. **Exit 2 refuses the write; exit 0 allows it.**
 
-Two orderings in here are deliberate and easy to get backwards:
+Three orderings in here are deliberate and easy to get backwards:
 
 - **The root is resolved from the file's path, not from `CLAUDE_PROJECT_DIR`.** A write inside a
   git worktree is judged by that worktree's config and state, which can legitimately differ from
   the main checkout's mid-cycle.
+- **The harness's own machinery is refused first, and answers to no gate state.** An open gate
+  opens `app/`; it does not open `.claude/state/`, which is what an open gate is made of.
 - **`HARNESS_GATE_BYPASS` is checked *after* the gate state.** When the gate is already OPEN the
   bypass never fires, so it cannot appear in a transcript except where it actually overrode a
   refusal.
@@ -32,8 +34,12 @@ flowchart TD
     B -- yes --> C["walk up from the file<br/>looking for .claude/scripts/harness.py"]
     C --> D{"found a harness root?"}
     D -- no --> Z1["exit 0 — outside any harness"]
-    D -- yes --> E["read THAT root's harness.json<br/>guarded, exempt_names, exempt_patterns"]
-    E --> F{"path matches a<br/>guarded pattern?"}
+    D -- yes --> E["read THAT root's harness.json<br/>protected, guarded, exempt_names, exempt_patterns"]
+    E --> P{"path is the harness's own<br/>state, script or wiring?"}
+    P -- "yes — .claude/state/, .claude/scripts/, .claude/settings.json" --> PB{"HARNESS_GATE_BYPASS=1?"}
+    PB -- no --> XP["exit 2 — REFUSED<br/>whatever the gate says"]
+    PB -- yes --> Z7["exit 0<br/>+ PROTECTED on stderr"]
+    P -- no --> F{"path matches a<br/>guarded pattern?"}
     F -- no --> Z2["exit 0 — not production code"]
     F -- yes --> G{"filename in<br/>exempt_names?"}
     G -- "yes — __init__.py" --> Z3["exit 0 — structural, no test can drive it"]
@@ -47,7 +53,9 @@ flowchart TD
     K -- no --> X["exit 2 — REFUSED<br/>'no failing test is on record'"]
 
     style X fill:#7f1d1d,stroke:#ef4444,color:#fff
+    style XP fill:#7f1d1d,stroke:#ef4444,color:#fff
     style Z6 fill:#78350f,stroke:#f59e0b,color:#fff
+    style Z7 fill:#78350f,stroke:#f59e0b,color:#fff
 ```
 
 ---
@@ -103,7 +111,7 @@ flowchart TD
 
 ## 3. Closing a cycle
 
-`done` is where the claim is made, so it is where both refusals live. Neither is in `green`:
+`done` is where the claim is made, so it is where all three refusals live. None is in `green`:
 coverage climbing toward the gate is the normal shape of a cycle, and refusing there would fight
 the work rather than the claim.
 
@@ -111,12 +119,15 @@ the work rather than the claim.
 flowchart TD
     A["harness.py cycle PROJECT ID done"] --> B{"--evidence given?"}
     B -- no --> R1["REFUSED — 'a done nobody can check<br/>is indistinguishable from a lie'"]
-    B -- yes --> C{"recorded coverage<br/>below coverage_gate?"}
+    B -- yes --> G{"is the test that opened<br/>the gate in any commit?"}
+    G -- no --> R3["REFUSED — the history does not show<br/>the order the gate exists to prove"]
+    G -- "yes, or no test recorded" --> C{"recorded coverage<br/>below coverage_gate?"}
     C -- "yes — e.g. 71% vs 90%" --> R2["REFUSED — cover it, or change<br/>the gate deliberately"]
     C -- "no, or never measured" --> D["state = done<br/>evidence + verified_at recorded"]
 
     style R1 fill:#7f1d1d,stroke:#ef4444,color:#fff
     style R2 fill:#7f1d1d,stroke:#ef4444,color:#fff
+    style R3 fill:#7f1d1d,stroke:#ef4444,color:#fff
     style D fill:#14532d,stroke:#22c55e,color:#fff
 ```
 
