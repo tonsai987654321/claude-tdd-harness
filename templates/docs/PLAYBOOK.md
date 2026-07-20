@@ -4,6 +4,10 @@ How to run the harness, resume it after a break, and recover when it misbehaves.
 
 Throughout, `<project>` is a name from `.claude/cycles/` — the harness has no project names baked in.
 
+For the shape of the whole system rather than the commands to drive it, read [`FLOW.md`](FLOW.md):
+seven diagrams covering the gate's decision path, a cycle, the four refusals that close one, install
+and re-sync, `init.sh`, the config, and which checks an agent can step around.
+
 ## Prerequisites
 
 Run the harness's own verification. It checks the toolchain, self-tests that the TDD gate still blocks, scans for unproven completions, and runs every scaffolded project's suite:

@@ -156,6 +156,26 @@ def test_a_gitignore_block_from_an_older_version_is_topped_up(repo: Path) -> Non
     assert gitignore.read_text(encoding="utf-8").count("__pycache__/") == 1
 
 
+def test_installed_docs_do_not_link_to_files_that_are_not_installed(repo: Path) -> None:
+    """FLOW.md ships into every scaffolded repo, and it linked to one of the plugin's own lessons.
+
+    Those are the plugin's history, deliberately not installed — so the link was broken in every
+    repo but this one, which is "documentation that lies", the failure CLAUDE.md names. Checked
+    where the document actually lands rather than where it was written.
+    """
+    import re
+
+    broken = []
+    for doc in (repo / "docs").rglob("*.md"):
+        for target in re.findall(r"\]\(([^)#][^)]*)\)", doc.read_text(encoding="utf-8")):
+            if target.startswith(("http", "mailto:")):
+                continue
+            if not (doc.parent / target).exists():
+                broken.append(f"{doc.relative_to(repo)} -> {target}")
+
+    assert not broken, "links that do not resolve in a scaffolded repo: " + "; ".join(broken)
+
+
 def test_scaffolder_is_not_vendored(repo: Path) -> None:
     """It resolves templates relative to __file__ and dies from .claude/scripts/. Lesson 0003."""
     assert not (repo / ".claude" / "scripts" / "harness_init.py").exists()

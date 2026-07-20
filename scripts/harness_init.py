@@ -460,6 +460,11 @@ def main(argv: list[str] | None = None) -> int:
     writer.write("init.sh", (TEMPLATES / "init.sh.tmpl").read_text(encoding="utf-8"),
                  framework=True, executable=True)
     writer.copy(TEMPLATES / "docs" / "PLAYBOOK.md", "docs/PLAYBOOK.md", framework=True)
+    # From the plugin's own docs/, not from templates/: it is one document, and keeping a second
+    # copy under templates/ would make it the next thing to drift. The person who needs it most is
+    # the one whose write just got refused inside a scaffolded repo, and until now that was the one
+    # place it did not exist.
+    writer.copy(PLUGIN_ROOT / "docs" / "FLOW.md", "docs/FLOW.md", framework=True)
     # Not wired into this repo's CI — it belongs in each PROJECT repo, and cycle 0 is what creates
     # those. Shipped here so the text is available at the moment someone scaffolds one, rather than
     # being a thing they have to go and find.

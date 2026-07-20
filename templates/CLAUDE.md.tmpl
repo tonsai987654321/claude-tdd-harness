@@ -10,7 +10,7 @@ This repository is a **harness**, not an application. It builds {{PROJECT_COUNT}
 
 This is enforced mechanically, not by good intentions. A `PreToolUse` hook blocks every write to a project's shipped code — the paths named in `guarded` in `.claude/harness.json` — until `harness.py red` has run a test and watched it fail. Tests, `__init__.py`, config and CI files are never blocked. See [ADR-0003](docs/adr/0003-mechanical-red-gate.md).
 
-If the gate blocks you, you skipped a step. Write the test.
+If the gate blocks you, you skipped a step. Write the test. [`docs/FLOW.md`](docs/FLOW.md) traces every path the gate can take, including the ones that refuse for a different reason.
 
 The harness's own machinery — `.claude/state/`, `.claude/scripts/`, `.claude/settings.json` — is refused **whatever the gate says**. A mechanism that can rewrite its own verdict is not a mechanism, and gate state is gitignored, so an edit there would leave no trace at all. Cycle files and `harness.json` stay yours to edit: they are committed, so changing one is a visible act in a diff someone reads.
 
@@ -87,6 +87,7 @@ brief/                      the specs — the contract, read fully before coding
 .claude/cycles/*.json       the ordered TDD cycles per project, lifted from each brief
 .claude/state/*.json        gate state, coverage, cycle progress, evidence (machine-written)
 .claude/scripts/harness.py  gate hook, red/green, cycle tracking, token accounting, handoff
+docs/FLOW.md                how the whole thing works, as diagrams — start here when a refusal surprises you
 docs/adr/                   decisions that were hard to reverse (index: harness.py adrs)
 docs/lessons/               what we learned the expensive way (index: harness.py lessons)
 CONTEXT.md                  domain glossary — the words the code must use

@@ -234,7 +234,7 @@ The verdict is what makes this more than a report. Everything above `--gate-only
 every session start, and the gate refuses production code while the verdict says the harness is
 broken — but *after* the exemptions, so tests and config stay writable. That ordering is the
 difference between a brake and a brick, and getting it wrong made the repo unrepairable by exactly
-the edits that repair it ([lesson 0013](lessons/0013-the-order-of-a-refusal-decides-whether-it-is-repairable.md)).
+the edits that repair it (the plugin's lesson 0013 — a scaffolded repo does not carry the plugin's own history).
 
 ---
 

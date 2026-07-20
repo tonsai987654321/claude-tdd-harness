@@ -14,6 +14,7 @@ The rule it enforces is one line — *no production code without a failing test 
 | `init.sh` | one command that proves the gate still blocks, then runs every scaffolded suite |
 | `.claude/.harness-version` | which build of the plugin last re-synced this repo |
 | `CLAUDE.md`, `CONTEXT.md` | the constitution and the domain glossary |
+| `docs/FLOW.md` | how the whole thing works, as diagrams — installed into the repo, not just linked from here |
 | `docs/PLAYBOOK.md`, `docs/adr/`, `docs/lessons/` | how to run it, why it is shaped this way, what went wrong before |
 | agents | `tdd-implementer`, `cycle-reviewer`, `project-auditor`, `reconcile-auditor` |
 | commands | `/harness-init`, `/harness-build`, `/harness-status`, `/harness-continue` |
