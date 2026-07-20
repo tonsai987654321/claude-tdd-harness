@@ -77,7 +77,20 @@ NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
 # Tests that drive the installer rather than the gate. They stay in the plugin: the installer is
 # deliberately not vendored, so a copy of its suite in a scaffolded repo tests a file that is not
 # there and reports the harness red. Which is exactly what it did, once.
-NOT_VENDORED = {"test_install.py", "test_plugin_surface.py"}
+NOT_VENDORED = {
+    "test_install.py",
+    "test_plugin_surface.py",
+    # Drive the installer, which is deliberately not vendored. Vendored, they fail in every
+    # scaffolded repo — and `init.sh` writes gate_verified=false on a red suite, so the gate then
+    # refuses that repo's production code. A test that cannot pass where it lands does not look
+    # untidy there, it shuts the repo down.
+    "test_board_ships.py",
+    # Scans this plugin's own git tree; in a scaffolded repo it grades somebody else's files.
+    "test_no_thai.py",
+    # Installs the plugin into a temp dir to prove the vendored suite is green there. Vendored, it
+    # would try to install a plugin that is not present, from inside the thing it is testing.
+    "test_vendored_suite.py",
+}
 
 # Copied into the target's .claude/scripts/. The harness must keep working in a fresh clone with
 # the plugin uninstalled — a portfolio repo is read by people who do not have your plugins.
