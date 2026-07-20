@@ -1,6 +1,6 @@
 {
   "name": "tdd-harness",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "A mechanical RED gate for test-driven development: a PreToolUse hook blocks every write to production code until a test has been run and watched to fail. Ships the gate, cycle tracking, evidence-gated completion, TDD subagents, and a scaffolder that installs the whole thing into a fresh repo.",
   "author": {
     "name": "tonsai"

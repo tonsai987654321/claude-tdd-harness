@@ -463,8 +463,16 @@ def main(argv: list[str] | None = None) -> int:
     # Not wired into this repo's CI — it belongs in each PROJECT repo, and cycle 0 is what creates
     # those. Shipped here so the text is available at the moment someone scaffolds one, rather than
     # being a thing they have to go and find.
-    writer.copy(TEMPLATES / "workflows" / "tdd-ordering.yml",
-                "docs/ci/tdd-ordering.yml", framework=True)
+    # Rendered, not copied: the tag in that URL is the third place a version would otherwise live,
+    # after the two manifests, and a version that has to be remembered in three places is a version
+    # that will be wrong in one of them. The project repo keeps whatever it was set up with, which
+    # is what pinning is for — following someone else's main lets a check change its mind about
+    # your history without you changing anything.
+    writer.write(
+        "docs/ci/tdd-ordering.yml",
+        render("workflows/tdd-ordering.yml", HARNESS_VERSION=version),
+        framework=True,
+    )
     writer.copy(TEMPLATES / "docs" / "adr" / "0000-template.md", "docs/adr/0000-template.md",
                 framework=True)
     # The ADR that explains why the gate exists travels with the gate. A mechanism whose reason

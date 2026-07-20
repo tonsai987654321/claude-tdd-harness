@@ -87,6 +87,36 @@ def test_every_agent_declares_a_name_and_description() -> None:
         assert "description:" in head[1], f"{path.name} declares no description"
 
 
+def test_nothing_outside_the_manifests_hardcodes_a_version() -> None:
+    """A version that must be remembered in three places will be wrong in one of them.
+
+    The CI workflow pins the tag it fetches harness.py from, which made it a third home for the
+    version alongside the two manifests. It is a template placeholder now, rendered at install
+    time — so this asserts the duplication has not crept back rather than that the copies agree.
+    """
+    import json
+
+    version = json.loads(
+        (PLUGIN_ROOT / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
+    pinned = re.compile(r"tdd-harness--v(\d+\.\d+\.\d+)")
+
+    stale: list[str] = []
+    for path in [
+        *PLUGIN_ROOT.glob("*.md"),
+        *(PLUGIN_ROOT / "templates").rglob("*"),
+        *(PLUGIN_ROOT / "scripts").glob("*"),
+        *(PLUGIN_ROOT / "commands").glob("*.md"),
+        *(PLUGIN_ROOT / "agents").glob("*.md"),
+    ]:
+        if not path.is_file():
+            continue
+        for found in pinned.findall(path.read_text(encoding="utf-8")):
+            if found != version:
+                stale.append(f"{path.relative_to(PLUGIN_ROOT)}: {found} (current is {version})")
+
+    assert not stale, "version references that have drifted: " + "; ".join(stale)
+
+
 @pytest.mark.parametrize("manifest", ["plugin.json", "marketplace.json"])
 def test_the_two_manifests_agree_on_the_version(manifest: str) -> None:
     """`claude plugin validate` enforces this, but only if someone runs it. The version is the

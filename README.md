@@ -249,7 +249,7 @@ Claude Code caches an installed plugin under the **version declared in `plugin.j
 
 So for any change to behaviour:
 
-1. Bump `version` in **both** `.claude-plugin/plugin.json` and the entry in `.claude-plugin/marketplace.json`. `claude plugin validate .` fails if they disagree.
+1. Bump `version` in **both** `.claude-plugin/plugin.json` and the entry in `.claude-plugin/marketplace.json`. `claude plugin validate .` fails if they disagree, and `tests/test_plugin_surface.py` fails if any other file has grown its own copy — the CI workflow's pinned tag is rendered from the manifest at install time rather than written down a third time.
 2. Commit and push.
 3. `claude plugin tag .` — creates `tdd-harness--v<version>`, revalidating that the manifests agree. Push it with `git push origin --tags`.
 4. **Verify the installed copy, not the repo.** Run `claude plugin update tdd-harness@tonsai-plugins`, then grep `~/.claude/plugins/cache/tonsai-plugins/tdd-harness/<version>/` for a string that exists only in the new build. If it is not there, it did not ship.

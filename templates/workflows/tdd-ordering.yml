@@ -35,7 +35,7 @@ jobs:
         # mind about your history without you changing anything.
         run: |
           curl -fsSL -o harness.py \
-            https://raw.githubusercontent.com/tonsai987654321/claude-tdd-harness/tdd-harness--v0.7.0/scripts/harness.py
+            https://raw.githubusercontent.com/tonsai987654321/claude-tdd-harness/tdd-harness--v{{HARNESS_VERSION}}/scripts/harness.py
 
       - name: Test before code
         # `guarded` and `projects_dir` come from .claude/harness.json when this repo carries one,
