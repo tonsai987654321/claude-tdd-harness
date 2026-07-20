@@ -28,8 +28,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,7 +79,21 @@ NAME_RE = re.compile(r"[A-Za-z0-9._-]+")
 # Tests that drive the installer rather than the gate. They stay in the plugin: the installer is
 # deliberately not vendored, so a copy of its suite in a scaffolded repo tests a file that is not
 # there and reports the harness red. Which is exactly what it did, once.
-NOT_VENDORED = {"test_install.py", "test_plugin_surface.py"}
+NOT_VENDORED = {
+    "test_install.py",
+    "test_plugin_surface.py",
+    # Drive the installer, which is deliberately not vendored. Vendored, they fail in every
+    # scaffolded repo — and `init.sh` writes gate_verified=false on a red suite, so the gate then
+    # refuses that repo's production code. A test that cannot pass where it lands does not look
+    # untidy there, it shuts the repo down.
+    "test_board_ships.py",
+    "test_install_board.py",
+    # Scans this plugin's own git tree; in a scaffolded repo it grades somebody else's files.
+    "test_no_thai.py",
+    # Installs the plugin into a temp dir to prove the vendored suite is green there. Vendored, it
+    # would try to install a plugin that is not present, from inside the thing it is testing.
+    "test_vendored_suite.py",
+}
 
 # Copied into the target's .claude/scripts/. The harness must keep working in a fresh clone with
 # the plugin uninstalled — a portfolio repo is read by people who do not have your plugins.
@@ -380,6 +396,46 @@ def append_gitignore(root: Path) -> str:
     return f"++ .gitignore (topped up: {', '.join(missing)})"
 
 
+def render_initial_board(root: Path, writer: Writer) -> str:
+    """Render PROGRESS.md and HANDOFF.md at install time.
+
+    They were generated only by `status --write` and `handoff`, so between installing the harness
+    and finishing a first cycle the repo had no board at all. That was survivable while both files
+    were gitignored; now that the board is committed, the gap is what a reviewer cloning the repo
+    actually sees — and it is also the moment the layout is least true, with CLAUDE.md naming two
+    files that are not there.
+
+    Generated from state, so this is not a claim about work: it is a board with every cycle queued,
+    which is what an install is. Written through the same user-content path as CLAUDE.md, so a
+    reinstall never overwrites a board that has since recorded something real.
+    """
+    harness = root / ".claude" / "scripts" / "harness.py"
+    if not harness.is_file():
+        return "!! PROGRESS.md not rendered (no vendored harness.py)"
+
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(root)}
+    rendered = []
+    for rel, argv in (("PROGRESS.md", ["status"]), ("HANDOFF.md", ["handoff"])):
+        if (root / rel).exists():
+            continue
+        proc = subprocess.run(
+            [sys.executable, str(harness), *argv],
+            capture_output=True, encoding="utf-8", errors="replace", env=env, cwd=root,
+        )
+        # A board is worth having and never worth failing an install over: a repo that scaffolded
+        # fine except for one generated file should say so, not roll back.
+        if proc.returncode != 0:
+            return f"!! {rel} not rendered ({' '.join(argv)} exited {proc.returncode})"
+        if argv == ["handoff"]:
+            continue  # `handoff` writes the file itself
+        writer.write(rel, proc.stdout)
+        rendered.append(rel)
+
+    if (root / "HANDOFF.md").is_file() and "HANDOFF.md" not in rendered:
+        rendered.append("HANDOFF.md")
+    return f"++ {', '.join(rendered)} (initial board)" if rendered else "== board already present"
+
+
 def cycle_stub(project: Project, order: int) -> str:
     body = {
         "project": project.name,
@@ -397,6 +453,11 @@ def cycle_stub(project: Project, order: int) -> str:
                 "id": 1,
                 "title": "TODO: the first behaviour, named as a behaviour and not as a class",
                 "first_test": "tests/test_todo.py" if project.runner == "pytest" else "src/todo.test.ts",
+                # Optional, and shown here because a feature nobody knows about is a feature that
+                # does not exist. `done` is refused while a listed cycle is not itself `done`, and
+                # next_cycle.py will not dispatch a cycle whose dependencies are open — so the
+                # ordering rule stops being a sentence in CLAUDE.md and starts being a refusal.
+                "depends_on": [0],
             },
         ],
     }
@@ -565,6 +626,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     install_lessons(writer)
+    board_note = render_initial_board(root, writer)
 
     # ------------------------------------------------------------------------ merged, not owned
     config_note = config_schema_note(root)
@@ -579,6 +641,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  ~~ {rel}  (re-synced from the plugin)")
     print(f"  {settings_note}")
     print(f"  {gitignore_note}")
+    print(f"  {board_note}")
     if config_note:
         print(f"  {config_note}")
     if writer.kept:

@@ -97,7 +97,18 @@ def test_an_unstamped_repo_says_so_rather_than_crashing(root: Path, tmp_path: Pa
 
 
 def test_init_sh_reads_the_stamp() -> None:
-    """The check has to run somewhere a person sees it, and init.sh is the one command they run."""
-    tmpl = (REPO_ROOT / "templates" / "init.sh.tmpl").read_text(encoding="utf-8")
+    """The check has to run somewhere a person sees it, and init.sh is the one command they run.
 
-    assert "version" in tmpl.split("$H")[-1] or "$H\" version" in tmpl, "init.sh never calls harness.py version"
+    Reads the template in the plugin and the rendered script in a scaffolded repo, because this
+    file is vendored and `templates/` is not. Hard-coding the template path made this test fail in
+    every installed repo — and a red vendored suite makes `init.sh` write gate_verified=false,
+    which shuts that repo's gate. The assertion is about the same line either way.
+    """
+    template = REPO_ROOT / "templates" / "init.sh.tmpl"
+    rendered = REPO_ROOT.parent / "init.sh"  # .claude/harness-tests/../../init.sh
+    source = next((p for p in (template, rendered) if p.is_file()), None)
+    assert source is not None, "neither templates/init.sh.tmpl nor a rendered init.sh was found"
+
+    text = source.read_text(encoding="utf-8")
+
+    assert "version" in text.split("$H")[-1] or '$H" version' in text, "init.sh never calls harness.py version"

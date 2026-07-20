@@ -57,12 +57,33 @@ def main() -> None:
 
         # a cycle marked done but lacking evidence is not really done
         by_id = {c["id"]: c for c in st["cycles"]}
+
+        def closed(cycle_id: object) -> bool:
+            cur = by_id.get(cycle_id, {"state": "queued", "evidence": ""})
+            return cur["state"] == "done" and bool(cur.get("evidence"))
+
+        # Declaration order is not dependency order: cycle 1 may depend on cycle 5. `cycle ... done`
+        # refuses an unmet dependency, but by then the work is written — the refusal costs a whole
+        # cycle to deliver. Skipping it here spends nothing (lesson 0013: where a refusal lands
+        # decides whether it is repairable).
+        blocked = []
         for c in seed:
-            cur = by_id.get(c["id"], {"state": "queued", "evidence": ""})
-            done = cur["state"] == "done" and cur.get("evidence")
-            if not done:
-                print(f"BUILD {project} {c['id']} {c['title']}")
-                return
+            if closed(c["id"]):
+                continue
+            waiting = [d for d in (c.get("depends_on") or []) if not closed(d)]
+            if waiting:
+                blocked.append((c, waiting))
+                continue
+            print(f"BUILD {project} {c['id']} {c['title']}")
+            return
+
+        # Every remaining cycle is waiting on another. Falling through to "DONE" would report a
+        # deadlocked project as a finished one.
+        if blocked:
+            for c, waiting in blocked:
+                deps = ", ".join(str(d) for d in waiting)
+                print(f"BLOCKED {project} {c['id']} {c['title']} — waiting on cycle(s) {deps}")
+            return
 
     print("DONE")
 
