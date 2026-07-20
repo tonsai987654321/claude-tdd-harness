@@ -18,9 +18,41 @@ ROOT="$(pwd -W 2>/dev/null)" || true
 export CLAUDE_PROJECT_DIR="$ROOT"
 H=".claude/scripts/harness.py"
 
+# --gate-only  everything that proves the harness itself, and nothing that needs the project's
+#              toolchain. Fast enough to run on every session start, which is the point: the
+#              checks in here used to happen only when somebody remembered.
+# --quiet      say nothing while passing. A session-start hook that narrates a healthy repo
+#              teaches people to skip its output, and then it cannot warn them.
+GATE_ONLY=0
+QUIET=0
+for arg in "$@"; do
+  case "$arg" in
+    --gate-only) GATE_ONLY=1 ;;
+    --quiet)     QUIET=1 ;;
+    *) echo "usage: ./init.sh [--gate-only] [--quiet]" >&2; exit 2 ;;
+  esac
+done
+
+ok() { [ "$QUIET" = 1 ] || printf "  ok   %s
+" "$1"; }
+say() { [ "$QUIET" = 1 ] || echo "$@"; }
+
+# The verdict this run reaches, written wherever it stops. The gate reads it and refuses guarded
+# writes while it says the harness is broken — a self-test whose result nothing consults is a
+# report, and this repo has a lesson about numbers that only get quoted (docs/lessons/0011).
+GATE_VERIFIED=0
+write_verdict() {
+  code=$?
+  mkdir -p "$ROOT/.claude/state" 2>/dev/null || true
+  printf '{"gate_verified": %s, "at": %s, "exit": %s}
+'     "$([ "$GATE_VERIFIED" = 1 ] && echo true || echo false)"     "$(date +%s)" "$code" > "$ROOT/.claude/state/.selftest.json" 2>/dev/null || true
+  exit $code
+}
+trap write_verdict EXIT
+
 need() {
   command -v "$1" >/dev/null 2>&1 || { echo "MISSING: $1 — $2"; exit 1; }
-  echo "  ok   $1"
+  ok "$1"
 }
 
 hint_for() {
@@ -51,7 +83,7 @@ uv_installer() {
 }
 
 ensure_uv() {
-  command -v uv >/dev/null 2>&1 && { echo "  ok   uv"; return 0; }
+  command -v uv >/dev/null 2>&1 && { ok "uv"; return 0; }
 
   cmd="$(uv_installer)"
   echo "MISSING: uv — the harness runs its own suite through it, and gets Python from it."
@@ -84,10 +116,10 @@ ensure_uv() {
     echo "  uv installed but is not on PATH in this shell. Open a new terminal and re-run ./init.sh."
     exit 1
   }
-  echo "  ok   uv (just installed)"
+  ok "uv (just installed)"
 }
 
-echo "=== Harness prerequisites ==="
+say "=== Harness prerequisites ==="
 ensure_uv
 
 # Everything below runs Python through $PY. Where the machine has a python3 that is the fastest
@@ -96,14 +128,14 @@ ensure_uv
 # even with uv sitting right there able to supply one.
 if command -v python3 >/dev/null 2>&1; then
   PY="python3"
-  echo "  ok   python3"
+  ok "python3"
 else
   PY="uv run --no-project --python 3.12 python"
-  echo "  ok   python 3.12 (provided by uv)"
+  ok "python 3.12 (provided by uv)"
 fi
 
-echo
-echo "=== Harness self-test ==="
+say
+say "=== Harness self-test ==="
 # A gate that has quietly stopped blocking is the worst possible failure: everything
 # looks green while the discipline it exists to enforce is gone. Prove it still bites.
 #
@@ -154,7 +186,7 @@ while IFS='|' read -r path want label; do
     echo "FAIL: gate returned $got, wanted $want — $label ($path)"
     exit 1
   fi
-  echo "  ok   $label"
+  ok "$label"
 done <<EOF
 $($PY - <<'PY'
 import json, pathlib
@@ -214,7 +246,7 @@ PY
 EOF
 
 $PY "$H" status >/dev/null
-echo "  ok   dashboard renders"
+ok "dashboard renders"
 
 # The suite under tests/ drives harness.py itself. It is pinned to 3.12 because it relies on
 # EncodingWarning (3.10+) to prove the harness never falls back to the machine's locale codec --
@@ -229,20 +261,25 @@ if [ ! -d "$ROOT/.claude/harness-tests" ]; then
   exit 1
 fi
 if uv run --no-project --python 3.12 --with pytest pytest "$ROOT/.claude/harness-tests" -q >/dev/null 2>&1; then
-  echo "  ok   harness suite passes"
+  ok "harness suite passes"
 else
   echo "FAIL: the harness's own test suite is red. Run:"
   echo "      uv run --no-project --python 3.12 --with pytest pytest .claude/harness-tests -q"
   exit 1
 fi
 
-echo
-echo "=== Unproven completions ==="
+say
+say "=== Unproven completions ==="
+export HARNESS_QUIET="$([ "$QUIET" = 1 ] && echo 1 || echo "")"
 $PY - <<'PY'
-import json, pathlib, sys
+import json, os, pathlib, sys
 bad, under = [], []
 state_dir = pathlib.Path(".claude/state")
-for f in sorted(state_dir.glob("*.json")) if state_dir.is_dir() else []:
+# Dotfiles are the harness's own bookkeeping — .selftest.json lives here too — and they carry no
+# project. Globbing them as state made this scan die on a KeyError the moment the verdict file
+# existed, which is to say the moment the check that writes it started working.
+state_files = sorted(f for f in state_dir.glob("*.json") if not f.name.startswith(".")) if state_dir.is_dir() else []
+for f in state_files:
     s = json.loads(f.read_text(encoding="utf-8"))
     project = s["project"]
     bad += [
@@ -266,11 +303,22 @@ if under:
     print("  FAIL: done cycles under the coverage gate: " + ", ".join(under))
     print("        Cover the gap and re-run green, or change the gate deliberately.")
     sys.exit(1)
-print("  ok   every done cycle carries evidence and meets its coverage gate")
+if not os.environ.get("HARNESS_QUIET"):
+    print("  ok   every done cycle carries evidence and meets its coverage gate")
 PY
 
-echo
-echo "=== Project tooling ==="
+# Everything above this line is the harness proving itself: the wired gate refuses what it must,
+# the dashboard renders, the vendored suite is green, and no cycle claims a completion it cannot
+# support. Past this line is the project's own toolchain, which is not the harness's to vouch for.
+GATE_VERIFIED=1
+if [ "$GATE_ONLY" = 1 ]; then
+  say
+  say "=== Harness verified ==="
+  exit 0
+fi
+
+say
+say "=== Project tooling ==="
 # `requires` from .claude/harness.json — the tools the project suites need, checked here rather
 # than at the top of the script. A missing Docker daemon is a real failure for a repo whose tests
 # are containerised, but it says nothing about the gate, and it must never be able to abort the
@@ -297,7 +345,7 @@ sys.exit(0 if "docker" in cfg.get("requires",[]) else 1)'; then
     echo "      \"docker\" is in requires, so a project here expects it — its tests will fail at the first fixture."
     exit 1
   }
-  echo "  ok   docker daemon"
+  ok "docker daemon"
 fi
 
 if $PY -c '
@@ -306,11 +354,11 @@ p=pathlib.Path(".claude/harness.json")
 cfg=json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
 sys.exit(0 if "gh" in cfg.get("requires",[]) else 1)'; then
   gh auth status >/dev/null 2>&1 || { echo "FAIL: gh is not authenticated. Run: gh auth login"; exit 1; }
-  echo "  ok   gh authenticated"
+  ok "gh authenticated"
 fi
 
-echo
-echo "=== Project suites ==="
+say
+say "=== Project suites ==="
 # One project per cycle file, each with the runner it declared. Nothing about which tools a
 # project uses is written here: `harness.py quality` and `green` read the commands out of
 # .claude/harness.json. Sniffing for pyproject.toml and package.json — which is what this loop
@@ -341,9 +389,9 @@ for cyclefile in .claude/cycles/*.json; do
 done
 [ "$found" = "1" ] || echo "  nothing to run yet — link_projects.sh clones the project repos"
 
-echo
-echo "=== Verification complete ==="
-echo
+say
+say "=== Verification complete ==="
+say
 echo "Next steps:"
 echo "1. Read PROGRESS.md for the board, or run: $PY $H status"
 echo "2. Take the next action in HANDOFF.md, or run: $PY $H handoff"

@@ -228,7 +228,7 @@ def known_projects() -> list[str]:
         except (json.JSONDecodeError, OSError):
             return (99, p.stem)
 
-    return [p.stem for p in sorted(CYCLE_DIR.glob("*.json"), key=rank)]
+    return [p.stem for p in sorted(CYCLE_DIR.glob("*.json"), key=rank) if not p.name.startswith(".")]
 
 
 def project_dir(project: str) -> Path:
@@ -251,6 +251,32 @@ def runner_for(project: str) -> str:
 
 
 # ---------------------------------------------------------------- gate (PreToolUse hook)
+
+
+def record_touch(project: str, rel: str) -> None:
+    """Note that a guarded file was written while this project's gate was open.
+
+    The gate is per-project, not per-file: one failing test opens every guarded path until green.
+    Narrowing that to the files a test covers would need language-specific import analysis, cannot
+    see the code that does not exist yet at RED time, and would block honest multi-file cycles and
+    every refactor — so the answer here is to make the breadth *visible* instead of refusing it.
+    A cycle that opened on one test and touched fourteen files is a fact a reviewer can act on.
+
+    Bookkeeping only, and never allowed to cost a write: if the state file is busy or malformed the
+    write still goes through, because a gate that fails on its own note-taking is worse than a gate
+    with a gap in its notes. Two subagents writing at once can lose an entry for the same reason.
+    """
+    try:
+        state = load_state(project)
+        gate = state.get("gate", {})
+        if gate.get("state") != "OPEN":
+            return
+        touched = gate.setdefault("touched", [])
+        if rel not in touched:
+            touched.append(rel)
+            save_state(project, state)
+    except Exception:
+        pass
 
 
 def deny(msg: str) -> None:
@@ -321,16 +347,44 @@ def cmd_gate() -> None:
     match = next((m for g in guarded_patterns(cfg) if (m := g.search(rel))), None)
     if not match:
         sys.exit(0)
+
     if target.name in set(cfg["exempt_names"]):
         sys.exit(0)
     if any(re.search(p, rel) for p in cfg["exempt_patterns"]):
         sys.exit(0)
+
+    # A self-test whose result nothing consults is a report. `init.sh` writes its verdict here and
+    # a SessionStart hook runs it, so a harness that has stopped enforcing stops being written
+    # against — fail closed, not fail quiet.
+    #
+    # AFTER the exemptions, and that placement is the whole difference between a brake and a brick.
+    # Checked before them, a failed verdict also refused tests and config — so the self-test's own
+    # "gate allows tests/" probe returned 2, the verdict could never flip back to true, and the
+    # repo was unrepairable by the exact edits repairing it requires. Whatever is refused here, the
+    # way out has to stay open.
+    #
+    # Only a recorded FAILURE refuses. A missing verdict means never verified, not verified-bad,
+    # and refusing there would brick a fresh clone before its first init.sh. And the honest limit:
+    # this catches the gate BREAKING, not someone determined to evade it — the verdict is a file,
+    # and while `protected` keeps the Write tool off it, nothing here gates `rm`.
+    verdict = STATE_DIR / ".selftest.json"
+    try:
+        if verdict.is_file() and json.loads(verdict.read_text(encoding="utf-8")).get("gate_verified") is False:
+            deny(
+                f"BLOCKED: {inside}\n"
+                "  The last ./init.sh could not verify this harness, so it is refusing production\n"
+                "  code until someone looks. Run ./init.sh and fix what it reports.\n"
+                "  Tests and config stay writable — that is how you repair it."
+            )
+    except (OSError, json.JSONDecodeError):
+        pass  # An unreadable verdict is not a failed one; never wedge a session on bookkeeping.
 
     project = match.group("project")
     rel = target.relative_to(root).as_posix()
     gate = load_state(project)["gate"]
 
     if gate.get("state") == "OPEN":
+        record_touch(project, rel)
         sys.exit(0)
 
     if os.environ.get("HARNESS_GATE_BYPASS") == "1":
@@ -480,9 +534,12 @@ def cmd_green(project: str) -> None:
     # committed, and without this the only record of which test justified the cycle is erased by
     # the very command that ends it.
     opened_with = state.get("gate", {}).get("test") or state.get("last_red_test")
+    touched = state.get("gate", {}).get("touched") or []
     state["gate"] = {"state": "SHUT", "closed_at": time.time()}
     if opened_with:
         state["last_red_test"] = opened_with
+    if touched:
+        state["last_touched"] = touched
     state["coverage"] = coverage
     save_state(project, state)
     print(f"\nGREEN. Gate SHUT for '{project}'. Coverage: {coverage if coverage is not None else '?'}%")
@@ -562,6 +619,10 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
             if evidence:
                 c["evidence"] = evidence
                 c["verified_at"] = time.strftime("%Y-%m-%d %H:%M")
+                # Recorded on the cycle, not left in state: the next `red` replaces the gate and
+                # the breadth of this cycle would be gone by the time anyone reviewed it.
+                if new_state == "done":
+                    c["touched"] = list(state.get("last_touched") or [])
             save_state(project, state)
             print(f"cycle {cycle_id} -> {new_state}")
             return
@@ -689,17 +750,21 @@ def render(project: str, stats: dict | None) -> str:
         "",
         f"`gate {gate}` · `coverage {cov}` · `cycles {done}/{len(s['cycles'])}`",
         "",
-        "| # | cycle | state | agent | tokens | evidence |",
-        "|---|-------|-------|-------|--------|----------|",
+        "| # | cycle | state | agent | tokens | files | evidence |",
+        "|---|-------|-------|-------|--------|-------|----------|",
     ]
     for c in s["cycles"]:
         if c["state"] != "done":
             ev = "-"
         else:
             ev = "yes" if c.get("evidence") else "**MISSING**"
+        # How much guarded code this cycle opened on one failing test. The gate is per-project, so
+        # this is the number that says whether "one test" meant one behaviour or a free hand.
+        touched = c.get("touched")
+        breadth = str(len(touched)) if touched else ("-" if c["state"] != "done" else "0")
         lines.append(
             f"| {c['id']} | {c['title']} | {GLYPH[c['state']]} {c['state']} "
-            f"| {c['agent']} | {fmt_tokens(c['tokens'])} | {ev} |"
+            f"| {c['agent']} | {fmt_tokens(c['tokens'])} | {breadth} | {ev} |"
         )
 
     if unproven:

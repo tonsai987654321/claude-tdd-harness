@@ -167,3 +167,60 @@ def test_the_loud_door_still_opens_the_protected_set(tmp_path):
     )
     assert proc.returncode == 0
     assert "PROTECTED" in proc.stderr, "a bypassed write to the machinery must be audible"
+
+
+# ------------------------------------------------------------------ the self-test's verdict
+
+
+def _verdict(root, passed):
+    import json as _json
+    (root / ".claude" / "state" / ".selftest.json").write_text(
+        _json.dumps({"gate_verified": passed, "at": 0, "exit": 0 if passed else 1}), encoding="utf-8")
+
+
+def test_a_failed_self_test_refuses_production_code(tmp_path):
+    """Four checks used to live only in a script somebody had to remember to run. init.sh writes
+    its verdict now and a SessionStart hook runs it, so a harness that has stopped enforcing stops
+    being written against — fail closed rather than fail quiet."""
+    root = _harness_root(tmp_path, gate_state="OPEN")
+    _verdict(root, False)
+    assert _probe(root, "projects/api/app/x.py").returncode == 2, "an open gate must not override this"
+
+
+def test_a_failed_self_test_leaves_the_repair_path_open(tmp_path):
+    """The difference between a brake and a brick, and it is only the placement of one check.
+
+    Ordered before the exemptions, a failed verdict also refused tests and config — so the
+    self-test's own "gate allows tests/" probe returned 2, the verdict could never flip back, and
+    the repo was unrepairable by exactly the edits that repair it. Whatever gets refused, the way
+    out has to stay open.
+    """
+    root = _harness_root(tmp_path)
+    _verdict(root, False)
+    assert _probe(root, "projects/api/tests/test_x.py").returncode == 0
+    assert _probe(root, ".claude/harness.json").returncode == 0
+    assert _probe(root, "projects/api/README.md").returncode == 0
+
+
+def test_a_repo_that_has_never_been_verified_is_not_refused(tmp_path):
+    """Missing means never verified, not verified-bad. Refusing here would brick a fresh clone
+    before its first init.sh, which is the one command that would fix it."""
+    root = _harness_root(tmp_path, gate_state="OPEN")
+    assert not (root / ".claude" / "state" / ".selftest.json").exists()
+    assert _probe(root, "projects/api/app/x.py").returncode == 0
+
+
+def test_writes_under_an_open_gate_are_recorded(tmp_path):
+    """The gate is per-project: one failing test opens every guarded path until green. Narrowing
+    that needs language-specific import analysis and would block honest multi-file cycles, so the
+    breadth is made visible instead — a cycle that opened on one test and touched fourteen files
+    is a fact a reviewer can act on."""
+    import json as _json
+
+    root = _harness_root(tmp_path, gate_state="OPEN")
+    for name in ("a.py", "b.py", "a.py"):
+        assert _probe(root, f"projects/api/app/{name}").returncode == 0
+
+    state = _json.loads((root / ".claude" / "state" / "api.json").read_text(encoding="utf-8"))
+    touched = state["gate"]["touched"]
+    assert sorted(touched) == ["projects/api/app/a.py", "projects/api/app/b.py"], touched

@@ -288,6 +288,7 @@ def merge_settings(root: Path, interpreter: str) -> str:
 
     gate = f'{interpreter} "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" gate'
     stats = f'{interpreter} "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" stats --write'
+    selftest = 'bash "$CLAUDE_PROJECT_DIR/init.sh" --gate-only --quiet'
 
     hooks = settings.setdefault("hooks", {})
     changed = []
@@ -301,11 +302,11 @@ def merge_settings(root: Path, interpreter: str) -> str:
         does not exist.
         """
         entries = hooks.setdefault(event, [])
-        marker = f'harness.py" {subcommand}'
+        marker = subcommand if subcommand.startswith("--") else f'harness.py" {subcommand}'
         for entry in entries:
             for hook in entry.get("hooks", []):
                 existing = hook.get("command", "")
-                if "harness.py" in existing and marker in existing:
+                if marker in existing:
                     if existing != command:
                         hook["command"] = command
                         changed.append(f"{event} (re-pointed)")
@@ -318,6 +319,11 @@ def merge_settings(root: Path, interpreter: str) -> str:
 
     ensure("PreToolUse", gate, "gate", "Write|Edit|MultiEdit|NotebookEdit")
     ensure("SubagentStop", stats, "stats", None)
+    # Every session re-proves the gate, quietly. Four checks used to live only in a script somebody
+    # had to remember: that the wired hook still refuses what it must, that the dashboard renders,
+    # that the vendored suite is green, and that no cycle claims a completion it cannot support.
+    # `--quiet` because a hook that narrates a healthy repo teaches people to skip its output.
+    ensure("SessionStart", selftest, "--gate-only", None)
 
     if not changed:
         return "== .claude/settings.json already wired (both hooks present)"

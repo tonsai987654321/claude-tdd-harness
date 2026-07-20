@@ -36,7 +36,7 @@ def build_order() -> list[str]:
         except (json.JSONDecodeError, OSError):
             return (99, p.stem)
 
-    return [p.stem for p in sorted(CYCLE_DIR.glob("*.json"), key=rank)]
+    return [p.stem for p in sorted(CYCLE_DIR.glob("*.json"), key=rank) if not p.name.startswith(".")]
 
 
 def state_for(project: str) -> dict | None:

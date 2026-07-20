@@ -158,23 +158,49 @@ Two different things get called "mechanical", and only one of them fires on its 
 | `cycle … done` below the project's `coverage_gate` | refused |
 | `cycle … done` when the test that opened the gate is in no commit | refused |
 
-**Checked only when someone runs `./init.sh`:**
+**Re-proved every session, by a `SessionStart` hook running `./init.sh --gate-only --quiet`:**
 
 | | |
 |---|---|
 | the gate still blocks every guarded path | gate probes, through the wired hook command |
 | the harness's own suite is green | vendored tests |
 | `done` cycles recorded before those refusals existed | state scan |
-| the project's own suite and quality gates | per cycle file |
 
-The second list is a *strong prior* — `CLAUDE.md` instructs it, nothing compels it. That is exactly
-the distinction this plugin exists to draw, so it would be dishonest to blur it here. Run `init.sh`.
+These used to be a *strong prior* — `CLAUDE.md` instructed them and nothing compelled them. The
+hook writes its verdict to `.claude/state/.selftest.json`, which is in `protected`, and **the gate
+reads it: while the verdict says the harness is broken, production code is refused.** A harness
+that has quietly stopped enforcing is the failure the whole thing exists to prevent, so it fails
+closed rather than fails quiet.
+
+Tests, docs and config stay writable while it is refusing — that is the difference between a brake
+and a brick, and it is worth stating because getting the order wrong made the repo unrepairable by
+exactly the edits that repair it.
+
+The honest limit: this catches the gate *breaking*, not someone determined to evade it. `protected`
+keeps the Write tool off the verdict; nothing here gates `rm`.
+
+**Still only when someone runs the full `./init.sh`:**
+
+| | |
+|---|---|
+| the project's own suite and quality gates | per cycle file — needs the project's toolchain, and Docker if it uses it |
 
 ## What this does not prove
 
 The gate proves **ordering**: a test existed and failed before the code did. It does not prove the test is any good. An `ImportError` counts as RED, and a test that asserts nothing passes the gate exactly like a test that asserts everything.
 
-It is also **per-project, not per-file**. One failing test opens every guarded path in that project until `green`, so a cycle can touch code the test says nothing about. Narrowing that would mean deciding which files a test covers, which is language-specific static analysis and would cost the config-driven genericity that lets this run against `gotest` or `cargo`. The trade was made deliberately; `cycle … done` requiring the test to be in the history is what raises the cost of an `assert False` from invisible to reviewable.
+It is also **per-project, not per-file**. One failing test opens every guarded path in that project until `green`, so a cycle can touch code the test says nothing about.
+
+Narrowing that was considered and declined. At RED the production file does not exist yet — an `ImportError` is the normal first failure — so the only knowable set is what the *test* imports directly, which misses every helper the implementation legitimately needs and blocks refactoring outright, since moving code between files is what refactoring is. The agent's way out would be `HARNESS_GATE_BYPASS`, and a bypass used daily stops being a signal. It would also need an import resolver per language, undoing the config-driven genericity. And it barely raises the attacker's cost: `assert False` becomes `from app.tariff import x; assert False`, one line, for exactly the file they wanted.
+
+So the breadth is **made visible instead of refused**. The gate records every guarded file written while it was open, and the dashboard carries the count per cycle:
+
+```
+| # | cycle          | state    | agent | tokens | files | evidence |
+| 1 | peak-rate tariff | [x] done | impl  | 12.4k  | 14    | yes      |
+```
+
+One test, fourteen files, is a fact a reviewer can act on. Judgement stays where judgement belongs.
 
 That gap is why the harness ships a reviewer agent and an evidence rule, and why `harness.py cycle <p> <id> done` refuses without evidence — what ran, what it printed, and the two commit SHAs. A completion nobody can check is indistinguishable from a lie. It refuses below the project's `coverage_gate` too, and `init.sh` fails on any `done` cycle that predates that check.
 
