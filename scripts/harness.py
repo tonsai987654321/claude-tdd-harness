@@ -19,6 +19,7 @@ Subcommands
     lessons   One line per live lesson. Read this, then open only the ones that apply.
     adrs      One line per accepted ADR. Superseded ones are history, not guidance.
     version   Which plugin version this .claude/ came from, and whether it is behind.
+    reconcile Rebuild a lost state file from a project's git log. Stops at `green`.
 """
 
 from __future__ import annotations
@@ -1291,6 +1292,77 @@ def cmd_stats(write: bool) -> None:
 # ---------------------------------------------------------------- entry
 
 
+def cmd_reconcile(project: str, write: bool) -> None:
+    """Rebuild what the git log can prove about a project's cycles.
+
+    `.claude/state/` is machine-local, so a fresh clone renders zeros against a finished repo.
+    Recovering from that took two rounds of subagent auditing, four suite runs and an auditor pass —
+    and every fact needed was already in the log, where `history` already goes for ordering.
+
+    What it will not do is the point. A `[RED]` commit followed by a `[GREEN]` commit proves the
+    order the gate exists to prove. It does not prove the suite passes now, that coverage clears the
+    gate, or that the quality gates ever ran — and those are what `done` asserts. So this stops at
+    `green`. A reconcile that wrote `done` from the log alone would be the same failure the rest of
+    this branch attacks, with the harness itself as the author.
+    """
+    if not (project_dir(project) / ".git").is_dir():
+        sys.exit(
+            f"cannot reconcile {project}: no git history at {project_dir(project).as_posix()}.\n"
+            f"  The log is the only record this rebuilds from. Clone the project first "
+            f"(link_projects.sh)."
+        )
+
+    # Oldest first, so the last commit seen for a cycle is the one that closed it.
+    log = git(project, "log", "--reverse", "--format=%h%x00%s")
+    seen: dict[str, dict[str, str]] = {}
+    for line in log.splitlines():
+        sha, _, subject = line.partition("\0")
+        m = LOGGED_CYCLE.search(subject)
+        if not m:
+            continue
+        half = "GREEN" if "[GREEN]" in subject else ("RED" if "[RED]" in subject else None)
+        if half:
+            seen.setdefault(m.group(1), {})[half] = sha
+
+    state = load_state(project)
+    changes, skipped = [], []
+    for c in state["cycles"]:
+        found = seen.get(str(c["id"]))
+        if not found:
+            continue
+        # `done` is a claim somebody made after watching something run. The log cannot re-derive it,
+        # so it must not overwrite it — and the evidence attached to it even less.
+        if c["state"] == "done":
+            skipped.append(str(c["id"]))
+            continue
+        rebuilt = "green" if "GREEN" in found else "red"
+        evidence = "; ".join(f"{found[h]} [{h}]" for h in ("RED", "GREEN") if h in found)
+        changes.append((c["id"], c["state"], rebuilt, evidence))
+        if write:
+            c["state"] = rebuilt
+            c["evidence"] = f"reconciled from {project} git log: {evidence}"
+            c["verified_at"] = time.strftime("%Y-%m-%d %H:%M")
+
+    if not changes:
+        print(f"{project}: nothing to reconcile — the log adds nothing the state does not have.")
+    for cycle_id, was, now, evidence in changes:
+        print(f"  cycle-{cycle_id}  {was} -> {now}   {evidence}")
+    if skipped:
+        print(f"  left alone: cycle(s) {', '.join(skipped)} are already `done` on evidence somebody observed.")
+
+    if changes:
+        print(
+            "\nRebuilt to `green`, never to `done`. The log proves a failing test preceded the code; "
+            "it does not\nprove the suite passes now, that coverage clears the gate, or that the "
+            "quality gates ran — which is\nwhat `done` asserts. Run the suite, then close each cycle "
+            "with what you watched it print."
+        )
+    if changes and not write:
+        print("\nNothing written. Re-run with --write to apply.")
+    if write:
+        save_state(project, state)
+
+
 def installed_plugin_version() -> str | None:
     """The version of the tdd-harness plugin installed on this machine, if there is one.
 
@@ -1418,6 +1490,11 @@ def main() -> None:
         cmd_adrs("--all" in args)
     elif cmd == "version":
         cmd_version()
+    elif cmd == "reconcile":
+        if not args:
+            sys.exit("usage: harness.py reconcile <project> [--write]")
+        require_known_project(args[0])
+        cmd_reconcile(args[0], "--write" in args)
     else:
         sys.exit(f"unknown subcommand: {cmd}")
 
