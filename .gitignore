@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .venv/
+
+# Worktrees live here. Untracked, they read as uncommitted work and make `claude plugin tag`
+# refuse to tag a release — which is exactly what happened to 0.9.0.
+.claude/worktrees/
