@@ -583,6 +583,25 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
     if new_state == "done":
         recorded = load_state(project).get("last_red_test") or []
         test_path = next((str(a) for a in recorded if not str(a).startswith("-")), None)
+
+        # A check that only runs when the data is present is a check anyone can skip by removing
+        # the data. Hand-written state that simply omitted `last_red_test` closed a cycle with no
+        # refusal at all — the same fail-open-on-missing shape as every other bug this harness has
+        # had. The cycle file says whether this cycle was ever supposed to have a test, and that
+        # file is the user's own declaration rather than something `red` writes.
+        declared = next(
+            (c for c in (project_config(project).get("cycles") or []) if str(c.get("id")) == str(cycle_id)),
+            {},
+        )
+        if declared.get("first_test") and not test_path:
+            sys.exit(
+                f"REFUSED: cycle {cycle_id} declares a first test ({declared['first_test']}), "
+                f"and no RED run is on record for {project}.\n"
+                f"  Either the gate was never opened for this cycle, or the state saying so was "
+                f"replaced.\n"
+                f"  Run `red`, or set the cycle's first_test to null if it genuinely has no test."
+            )
+
         if test_path:
             if not (project_dir(project) / ".git").is_dir():
                 sys.exit(

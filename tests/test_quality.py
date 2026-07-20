@@ -351,3 +351,43 @@ def test_a_config_predating_protected_still_guards_the_harness(tmp_path: Path) -
         env={**os.environ, "CLAUDE_PROJECT_DIR": str(tmp_path)},
     )
     assert proc.returncode == 2, proc.stdout + proc.stderr
+
+
+def test_a_cycle_declaring_a_test_cannot_close_with_no_red_on_record(tmp_path: Path) -> None:
+    """A check that only runs when its data is present is a check anyone skips by removing the data.
+
+    Hand-written state that simply omitted `last_red_test` closed a cycle with no refusal — the
+    git binding never fired, because it was written to fire only when a test was recorded. The
+    cycle file's own `first_test` says whether this cycle was ever meant to have one, so the
+    absence becomes evidence rather than an exemption.
+    """
+    root = red_repo(tmp_path, commit_test=True)
+    cycles = root / ".claude" / "cycles" / "widget.json"
+    body = json.loads(cycles.read_text(encoding="utf-8"))
+    body["cycles"][0]["first_test"] = "tests/test_thing.py"
+    cycles.write_text(json.dumps(body), encoding="utf-8")
+
+    state = root / ".claude" / "state" / "widget.json"
+    forged = json.loads(state.read_text(encoding="utf-8"))
+    del forged["last_red_test"]          # exactly what a forged state looks like
+    state.write_text(json.dumps(forged), encoding="utf-8")
+
+    proc = close(root)
+    assert proc.returncode != 0
+    assert "no RED run is on record" in proc.stdout + proc.stderr
+
+
+def test_a_cycle_declaring_no_test_still_closes(tmp_path: Path) -> None:
+    """Cycle 0 is scaffolding: `first_test` is null and there is nothing to have run."""
+    root = red_repo(tmp_path, commit_test=True)
+    cycles = root / ".claude" / "cycles" / "widget.json"
+    body = json.loads(cycles.read_text(encoding="utf-8"))
+    body["cycles"][0]["first_test"] = None
+    cycles.write_text(json.dumps(body), encoding="utf-8")
+
+    state = root / ".claude" / "state" / "widget.json"
+    forged = json.loads(state.read_text(encoding="utf-8"))
+    del forged["last_red_test"]
+    state.write_text(json.dumps(forged), encoding="utf-8")
+
+    assert close(root).returncode == 0
