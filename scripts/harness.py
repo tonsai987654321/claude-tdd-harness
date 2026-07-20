@@ -1258,6 +1258,21 @@ def cmd_stats(write: bool) -> None:
 # ---------------------------------------------------------------- entry
 
 
+def require_known_project(project: str) -> None:
+    """Refuse an unknown project by name, and say which ones exist.
+
+    `green no-such-project` used to surface a `FileNotFoundError` carrying a `PosixPath` — an
+    internal type answering a typo. The harness knows the answer: the cycle files are the list.
+    """
+    if (CYCLE_DIR / f"{project}.json").exists():
+        return
+    known = known_projects()
+    sys.exit(
+        f"unknown project {project!r}; known: {', '.join(known) if known else '(none defined)'}\n"
+        f"  Projects are declared by their cycle file, {CYCLE_DIR.as_posix()}/<project>.json."
+    )
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         sys.exit(__doc__)
@@ -1266,8 +1281,14 @@ def main() -> None:
     if cmd == "gate":
         cmd_gate()
     elif cmd == "red":
+        if len(args) < 2:
+            sys.exit("usage: harness.py red <project> <test-path> [runner args]")
+        require_known_project(args[0])
         cmd_red(args[0], args[1:])
     elif cmd == "green":
+        if not args:
+            sys.exit("usage: harness.py green <project>")
+        require_known_project(args[0])
         cmd_green(args[0])
     elif cmd == "quality":
         if not args:
@@ -1292,6 +1313,12 @@ def main() -> None:
             i = args.index("--evidence")
             evidence = " ".join(args[i + 1 :]).strip() or None
             args = args[:i]
+        if len(args) < 3:
+            sys.exit(
+                "usage: harness.py cycle <project> <cycle-id> "
+                "<queued|red|green|done|blocked> [agent] [--evidence TEXT]"
+            )
+        require_known_project(args[0])
         agent = args[3] if len(args) > 3 else None
         cmd_cycle(args[0], args[1], args[2], agent, evidence)
     elif cmd == "status":
