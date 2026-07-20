@@ -941,6 +941,29 @@ def fmt_tokens(n: int) -> str:
 GLYPH = {"queued": "[ ]", "red": "[R]", "green": "[G]", "done": "[x]", "blocked": "[!]"}
 
 
+LOGGED_CYCLE = re.compile(r"\bcycle-(\d+)\b")
+
+
+def log_drift(project: str, cycles: list[dict]) -> tuple[int, int] | None:
+    """`(highest defined id, highest id in the log)` when the log has run past the cycle file.
+
+    The cycle file records what was *planned*; the log records what happened. When they diverge the
+    board is not wrong about anything it says — every number on it is internally consistent with the
+    file it read — which is precisely why nobody notices. So compare against the record the harness
+    does not write.
+    """
+    ids = [int(c["id"]) for c in cycles if str(c["id"]).lstrip("-").isdigit()]
+    if not ids:
+        return None
+    subjects = git(project, "log", "--all", "--format=%s")
+    if not subjects:
+        return None
+    logged = [int(n) for n in LOGGED_CYCLE.findall(subjects)]
+    if not logged:
+        return None
+    return (max(ids), max(logged)) if max(logged) > max(ids) else None
+
+
 def render(project: str, stats: dict | None) -> str:
     s = load_state(project)
     gate = s["gate"]["state"]
@@ -970,6 +993,16 @@ def render(project: str, stats: dict | None) -> str:
             f"| {c['id']} | {title} | {GLYPH[c['state']]} {c['state']} "
             f"| {c['agent']} | {fmt_tokens(c['tokens'])} | {breadth} | {ev} |"
         )
+
+    if (drift := log_drift(project, s["cycles"])) is not None:
+        highest_id, highest_logged = drift
+        lines += [
+            "",
+            f"> **Cycle file behind the log**: `.claude/cycles/{project}.json` defines up to id "
+            f"{highest_id}, and the log carries `cycle-{highest_logged}`. The board can only ever "
+            f"render `n/{len(s['cycles'])}` — it is not lying, it is reporting faithfully on a file "
+            f"that stopped describing the project. Add the missing cycles to the cycle file.",
+        ]
 
     orphans = [c for c in s["cycles"] if c.get("orphan")]
     if orphans:
