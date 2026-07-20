@@ -16,13 +16,16 @@ checks matters, the order here is the order in the source.
 Wired into `.claude/settings.json` as `python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" gate`,
 matching `Write|Edit|MultiEdit|NotebookEdit`. **Exit 2 refuses the write; exit 0 allows it.**
 
-Three orderings in here are deliberate and easy to get backwards:
+Four orderings in here are deliberate and easy to get backwards:
 
 - **The root is resolved from the file's path, not from `CLAUDE_PROJECT_DIR`.** A write inside a
   git worktree is judged by that worktree's config and state, which can legitimately differ from
   the main checkout's mid-cycle.
 - **The harness's own machinery is refused first, and answers to no gate state.** An open gate
   opens `app/`; it does not open `.claude/state/`, which is what an open gate is made of.
+- **The self-test's verdict is checked *after* the exemptions.** Before them, a failed verdict also
+  refused tests — so the self-test's own `gate allows tests/` probe failed, the verdict could never
+  clear, and the repo was unrepairable by the edits that repair it. See lesson 0013.
 - **`HARNESS_GATE_BYPASS` is checked *after* the gate state.** When the gate is already OPEN the
   bypass never fires, so it cannot appear in a transcript except where it actually overrode a
   refusal.
@@ -45,15 +48,18 @@ flowchart TD
     G -- "yes — __init__.py" --> Z3["exit 0 — structural, no test can drive it"]
     G -- no --> H{"matches an<br/>exempt_pattern?"}
     H -- "yes — *.test.ts, __tests__/, vite.config.ts …" --> Z4["exit 0 — tests and config"]
-    H -- no --> I["project = the captured group<br/>read .claude/state/PROJECT.json"]
+    H -- no --> V{"last ./init.sh verdict<br/>says the harness is broken?"}
+    V -- yes --> XV["exit 2 — REFUSED<br/>repair it; tests and config stayed open"]
+    V -- "no, or never run" --> I["project = the captured group<br/>read .claude/state/PROJECT.json"]
     I --> J{"gate state?"}
-    J -- OPEN --> Z5["exit 0 — a failing test is on record"]
+    J -- OPEN --> T["record the file in gate.touched<br/>best-effort, never costs the write"] --> Z5["exit 0 — a failing test is on record"]
     J -- SHUT --> K{"HARNESS_GATE_BYPASS=1?"}
     K -- yes --> Z6["exit 0<br/>+ a line on stderr, into the transcript"]
     K -- no --> X["exit 2 — REFUSED<br/>'no failing test is on record'"]
 
     style X fill:#7f1d1d,stroke:#ef4444,color:#fff
     style XP fill:#7f1d1d,stroke:#ef4444,color:#fff
+    style XV fill:#7f1d1d,stroke:#ef4444,color:#fff
     style Z6 fill:#78350f,stroke:#f59e0b,color:#fff
     style Z7 fill:#78350f,stroke:#f59e0b,color:#fff
 ```
