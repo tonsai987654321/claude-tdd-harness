@@ -5,7 +5,7 @@
 
 ## Context
 
-All three briefs say the same thing in bold: **ห้ามเขียน production code โดยไม่มี failing test มาก่อน** — never write production code without a failing test first.
+All three briefs say the same thing in bold: **never write production code without a failing test first.**
 
 An instruction in `CLAUDE.md` is a strong prior, not a constraint. Over a long session an agent under pressure to make a test pass will write the implementation and then the test, and will describe the result as test-driven, because from the inside those two orderings feel identical. Nothing in the artefact distinguishes them afterwards. That is precisely why the discipline is worth anything: it cannot be reconstructed after the fact.
 
