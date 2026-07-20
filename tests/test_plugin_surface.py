@@ -127,3 +127,24 @@ def test_the_two_manifests_agree_on_the_version(manifest: str) -> None:
     market = json.loads((PLUGIN_ROOT / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
     entry = next(p for p in market["plugins"] if p["name"] == plugin["name"])
     assert entry["version"] == plugin["version"]
+
+
+def test_the_repos_own_gitignore_covers_worktrees() -> None:
+    """`claude plugin tag` refuses to tag a dirty tree, and a worktree makes the tree dirty.
+
+    Entering a worktree creates `.claude/worktrees/<name>/` inside this repo. Untracked, it reads
+    as uncommitted work affecting the release, so tagging aborts:
+
+        ✘ Uncommitted changes affecting this release — commit them first
+          .claude/
+
+    That blocked an actual release. The plugin cache updated to the new version while no tag
+    existed for it — and the CI workflow template pins its checker to `tdd-harness--v<version>`,
+    so a project rendering that workflow would fetch a tag that was never pushed.
+    """
+    ignored = {line.strip() for line in (PLUGIN_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()}
+
+    assert ".claude/worktrees/" in ignored, (
+        "a worktree under .claude/ leaves this repo dirty, which makes `claude plugin tag` refuse "
+        "to tag the release"
+    )
