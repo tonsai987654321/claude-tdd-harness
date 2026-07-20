@@ -7,8 +7,16 @@
 # Built projects are their own repos with their own remotes. link_projects.sh clones them.
 projects/
 
-# Generated from state on every run. Hand-editing them is how a board starts lying.
-PROGRESS.md
+# PROGRESS.md is NOT ignored, deliberately. CLAUDE.md tells you your reviewer is an interviewer
+# reading this repo on GitHub, and lists the board in the layout — so hiding it left the one
+# artifact that shows the discipline as the one artifact that did not ship. It is generated, but so
+# is a lockfile. Regenerate it before you commit (`harness.py status --write`); hand-editing it is
+# how a board starts lying.
+#
+# HANDOFF.md is ignored, and the difference is in the code rather than in taste: it stamps the time
+# into its own header on every render, so it is dirty after every run whether or not anything
+# changed. It is also addressed to the next session rather than to a reader. `status` writes no
+# timestamp — only one of the two carries information at the rate it changes.
 HANDOFF.md
 
 # A local bundle can carry .env credentials into a commit.

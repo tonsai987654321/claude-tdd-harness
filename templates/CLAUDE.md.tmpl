@@ -30,7 +30,8 @@ Before writing code:
 
 1. `python3 .claude/scripts/harness.py status --write`
 2. `python3 .claude/scripts/harness.py handoff`
-3. Commit. Leave the repo so the next session can run `./init.sh` immediately.
+3. Commit, `PROGRESS.md` included — it is the board a reviewer reads, and it ships. Leave the repo
+   so the next session can run `./init.sh` immediately.
 
 ## Definition of done — for a cycle
 
@@ -91,8 +92,8 @@ docs/FLOW.md                how the whole thing works, as diagrams — start her
 docs/adr/                   decisions that were hard to reverse (index: harness.py adrs)
 docs/lessons/               what we learned the expensive way (index: harness.py lessons)
 CONTEXT.md                  domain glossary — the words the code must use
-PROGRESS.md                 generated dashboard; never hand-edit
-HANDOFF.md                  generated next-action for the next session; never hand-edit
+PROGRESS.md                 generated dashboard; committed, never hand-edit
+HANDOFF.md                  generated next-action for the next session; local, never hand-edit
 ```
 
 ## Commands
