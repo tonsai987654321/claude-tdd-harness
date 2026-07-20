@@ -11,6 +11,7 @@ Subcommands
     green     Run the full suite; on pass, shut the gate and record coverage.
     quality   Run the project's linter/formatter/type-checker, as declared by its runner.
     suite     Run the project's tests read-only: no gate change, no coverage recorded.
+    history   Check a project's git log for test-before-code ordering. Built to run in CI.
     cycle     Move a TDD cycle between states. `done` requires --evidence.
     status    Render the dashboard to stdout and to PROGRESS.md.
     stats     Attribute token usage to each subagent from the session transcript.
@@ -423,6 +424,89 @@ def run_suite(project: str, spec: dict, args: list[str]) -> tuple[int, str]:
     out = proc.stdout + proc.stderr
     print(out)
     return proc.returncode, out
+
+
+TEST_PATH = re.compile(r"(?:^|/)tests?/|[._](?:test|spec)\.[a-z]+$|(?:^|/)__tests__/")
+
+
+def cmd_history(project: str, repo: Path | None = None) -> None:
+    """Check the git history for the ordering the gate exists to produce: test first, then code.
+
+    Everything else in this harness runs on the machine the agent runs on and reads state the
+    agent can reach, which makes it evidence about a cooperative agent rather than a boundary.
+    This is the one check meant to run somewhere else — in CI, where the agent writes the code but
+    not the verdict — and it reads only `git log`, which the harness never writes.
+
+    The rule is the harness's own model, counted rather than asserted. Walking oldest to newest, a
+    commit touching tests banks a RED and a commit touching guarded code spends one; code that
+    arrives with nothing banked is the violation. Commits touching neither — scaffolding, docs, CI
+    — are not in the ledger at all.
+
+    A commit carrying tests and code together banks and immediately spends, which is deliberate.
+    It is the one shape this cannot judge, because the ordering it exists to prove happened inside
+    a single commit where git cannot see it. PLAYBOOK asks for two commits per cycle for exactly
+    that reason, and a repo that squashes gets a weaker check rather than a false accusation.
+    """
+    # `--repo` points at a checkout directly, which is how this runs in CI: the project repo is
+    # its own root there, not a directory under the harness. The guarded patterns are matched
+    # against a synthesised `projects/<name>/` prefix either way, so the same config decides what
+    # counts as production code in both places.
+    d = repo or project_dir(project)
+    if not (d / ".git").is_dir():
+        sys.exit(f"harness: no git history at {d} — nothing to check.")
+
+    cfg = harness_config()
+    patterns = guarded_patterns(cfg)
+    prefix = f"{cfg['projects_dir']}/{project}/"
+
+    proc = subprocess.run(
+        ["git", "-C", str(d), "log", "--reverse", "--no-merges", "--format=%H%x1f%s", "--name-only"],
+        capture_output=True, **DECODE,
+    )
+    log = proc.stdout.strip()
+    if not log:
+        sys.exit(f"harness: {project} has no commits.")
+
+    banked, violations, counted = 0, [], 0
+    sha = subject = ""
+    files: list[str] = []
+
+    def settle() -> None:
+        nonlocal banked, counted
+        if not sha:
+            return
+        code = any(any(p.search(prefix + f) for p in patterns) for f in files)
+        tests = any(TEST_PATH.search(f) for f in files)
+        if not (code or tests):
+            return
+        counted += 1
+        if tests:
+            banked += 1
+        if code:
+            if banked:
+                banked -= 1
+            else:
+                violations.append(f"{sha[:8]} {subject}")
+
+    for line in log.splitlines():
+        if "\x1f" in line:
+            settle()
+            sha, subject = line.split("\x1f", 1)
+            files = []
+        elif line.strip():
+            files.append(line.strip())
+    settle()
+
+    if violations:
+        print(f"harness: {project} — production code committed with no test commit before it:\n")
+        for v in violations:
+            print(f"  {v}")
+        print(
+            f"\n  {len(violations)} of {counted} relevant commits. The gate proves this ordering "
+            "locally;\n  this proves it survived into the history, where it can be reviewed."
+        )
+        sys.exit(1)
+    print(f"harness: {project} — {counted} commits, every code commit preceded by a test commit.")
 
 
 def cmd_quality(project: str) -> None:
@@ -1049,6 +1133,15 @@ def main() -> None:
         if not args:
             sys.exit("usage: harness.py suite <project>")
         cmd_suite(args[0])
+    elif cmd == "history":
+        repo = None
+        if "--repo" in args:
+            i = args.index("--repo")
+            repo = Path(args[i + 1]).resolve()
+            args = args[:i] + args[i + 2:]
+        if not args:
+            sys.exit("usage: harness.py history <project> [--repo PATH]")
+        cmd_history(args[0], repo)
     elif cmd == "cycle":
         evidence = None
         if "--evidence" in args:

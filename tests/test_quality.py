@@ -391,3 +391,80 @@ def test_a_cycle_declaring_no_test_still_closes(tmp_path: Path) -> None:
     state.write_text(json.dumps(forged), encoding="utf-8")
 
     assert close(root).returncode == 0
+
+
+# ------------------------------------------------------------------ the check CI runs
+
+
+def commit(repo: Path, subject: str, *files: str) -> None:
+    for f in files:
+        (repo / f).parent.mkdir(parents=True, exist_ok=True)
+        with (repo / f).open("a", encoding="utf-8") as fh:
+            fh.write("x\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@e",
+                    "commit", "-q", "-m", subject], check=True, capture_output=True)
+
+
+def project_repo(tmp_path: Path) -> Path:
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "harness.json").write_text(
+        json.dumps({"projects_dir": "projects", "guarded": ["app/"]}), encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, capture_output=True)
+    return repo
+
+
+def history(tmp_path: Path, repo: Path):
+    return run(tmp_path, "history", "widget", "--repo", str(repo))
+
+
+def test_history_accepts_a_test_commit_before_each_code_commit(tmp_path: Path) -> None:
+    repo = project_repo(tmp_path)
+    commit(repo, "chore: scaffold", ".github/workflows/ci.yml")
+    commit(repo, "test(1): tariff [RED]", "tests/test_tariff.py")
+    commit(repo, "feat(1): tariff [GREEN]", "app/tariff.py")
+    proc = history(tmp_path, repo)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_history_rejects_code_that_arrived_before_any_test(tmp_path: Path) -> None:
+    """The one check an agent cannot make pass by editing the repo it is working in: it reads git
+    log, in CI, and the harness never writes git log."""
+    repo = project_repo(tmp_path)
+    commit(repo, "feat: the whole thing", "app/tariff.py")
+    commit(repo, "test: added afterwards", "tests/test_tariff.py")
+    proc = history(tmp_path, repo)
+    assert proc.returncode != 0
+    assert "feat: the whole thing" in proc.stdout + proc.stderr
+
+
+def test_history_ignores_commits_that_are_neither(tmp_path: Path) -> None:
+    """Scaffolding, docs and CI are not part of the ledger — counting them would make the check
+    complain about the commits that set the project up."""
+    repo = project_repo(tmp_path)
+    for subject, f in [("docs: readme", "README.md"), ("chore: ci", ".github/workflows/ci.yml"),
+                       ("chore: lockfile", "uv.lock")]:
+        commit(repo, subject, f)
+    proc = history(tmp_path, repo)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "0 commits" in proc.stdout
+
+
+def test_history_spends_one_banked_test_per_code_commit(tmp_path: Path) -> None:
+    """Two code commits behind a single test commit is one cycle's worth of test paying for two
+    cycles' worth of code."""
+    repo = project_repo(tmp_path)
+    commit(repo, "test(1): one [RED]", "tests/test_one.py")
+    commit(repo, "feat(1): one [GREEN]", "app/one.py")
+    commit(repo, "feat(2): two, no test", "app/two.py")
+    proc = history(tmp_path, repo)
+    assert proc.returncode != 0
+    assert "feat(2): two, no test" in proc.stdout + proc.stderr
+
+
+def test_history_needs_a_repo_that_exists(tmp_path: Path) -> None:
+    proc = run(tmp_path, "history", "widget", "--repo", str(tmp_path / "nope"))
+    assert proc.returncode != 0
+    assert "no git history" in proc.stdout + proc.stderr

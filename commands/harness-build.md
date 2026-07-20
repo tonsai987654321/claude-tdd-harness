@@ -43,6 +43,8 @@ You are the **orchestrator** for `$1`. You do not write project code yourself â€
 
 There is no failing test to write for scaffolding, so do it yourself in the main thread. What belongs here is whatever the `stack` in `.claude/harness.json` needs before a test can run at all: the package manifest and lockfile, the test runner's config and fixtures, any container or compose file the integration tests require, the CI workflow, and an example environment file. Read the brief and the stack â€” do not reach for a file list from another project.
 
+Copy `docs/ci/tdd-ordering.yml` into the project repo as `.github/workflows/tdd-ordering.yml` while you are here. It is the one check that runs where the agent does not: it reads the git log and fails a PR whose code commit has no test commit before it. Everything else the harness does runs on this machine and reads state reachable from it.
+
 The gate does not block any of it: it guards only the paths in `guarded`. The first file you create *under* a guarded path must be demanded by a failing test in cycle 1, and that is the line cycle 0 must not cross.
 
 ## Between cycles

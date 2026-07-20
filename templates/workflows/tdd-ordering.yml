@@ -1,0 +1,44 @@
+# Copy this into a PROJECT repo as .github/workflows/tdd-ordering.yml.
+#
+# Every other check in this harness runs on the machine the agent runs on and reads state the agent
+# can reach. That makes them evidence about a cooperative agent, not a boundary: a shell command
+# rewrites gate state without any hook firing, because the gate only ever sees Write and Edit.
+#
+# This one runs where the agent writes the code but not the verdict. It reads `git log` and nothing
+# else — no harness state, no config the branch can edit into agreement — and asks the single
+# question the gate exists to make true: did a test commit come before the code commit?
+#
+# It is the only check here an agent cannot make pass by changing the repo it is working in.
+name: TDD ordering
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ordering:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The ledger is walked from the first commit; a shallow clone would silently start
+          # counting partway through and call an honest history a violation.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the harness's checker
+        # Pinned to a tag, not a branch: a check that follows someone else's main can change its
+        # mind about your history without you changing anything.
+        run: |
+          curl -fsSL -o harness.py \
+            https://raw.githubusercontent.com/tonsai987654321/claude-tdd-harness/tdd-harness--v0.7.0/scripts/harness.py
+
+      - name: Test before code
+        # `guarded` and `projects_dir` come from .claude/harness.json when this repo carries one,
+        # and from the shipped defaults otherwise — the same config that decides what the local
+        # gate refuses decides what CI counts as production code.
+        run: python3 harness.py history "${GITHUB_REPOSITORY##*/}" --repo .

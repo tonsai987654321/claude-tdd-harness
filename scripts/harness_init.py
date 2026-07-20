@@ -460,6 +460,11 @@ def main(argv: list[str] | None = None) -> int:
     writer.write("init.sh", (TEMPLATES / "init.sh.tmpl").read_text(encoding="utf-8"),
                  framework=True, executable=True)
     writer.copy(TEMPLATES / "docs" / "PLAYBOOK.md", "docs/PLAYBOOK.md", framework=True)
+    # Not wired into this repo's CI — it belongs in each PROJECT repo, and cycle 0 is what creates
+    # those. Shipped here so the text is available at the moment someone scaffolds one, rather than
+    # being a thing they have to go and find.
+    writer.copy(TEMPLATES / "workflows" / "tdd-ordering.yml",
+                "docs/ci/tdd-ordering.yml", framework=True)
     writer.copy(TEMPLATES / "docs" / "adr" / "0000-template.md", "docs/adr/0000-template.md",
                 framework=True)
     # The ADR that explains why the gate exists travels with the gate. A mechanism whose reason

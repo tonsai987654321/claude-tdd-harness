@@ -307,6 +307,42 @@ if not os.environ.get("HARNESS_QUIET"):
     print("  ok   every done cycle carries evidence and meets its coverage gate")
 PY
 
+# The machinery, checked against what was committed. The gate only ever sees Write and Edit, so a
+# shell command reaches .claude/scripts/ and .claude/settings.json without any hook firing — but
+# both are committed, and git remembers. No shell parsing, no guessing at intent: either the files
+# match HEAD or they do not.
+#
+# Three outcomes, and the middle one is why this is not a skip. Tamper-evidence needs a reference;
+# with no git history there is nothing to compare against, so the property simply does not exist
+# here and saying so is the honest report. It is printed even under --quiet, because "unverifiable"
+# is not the same as "fine".
+if [ ! -d "$ROOT/.git" ]; then
+  echo "  !!   this repo is not under git, so the harness machinery cannot be compared to anything."
+  echo "         Shell writes to .claude/scripts/ would go unnoticed."
+elif ! git -C "$ROOT" rev-parse --verify -q HEAD >/dev/null 2>&1; then
+  # `git init` with nothing committed yet. `git diff HEAD` dies on the missing revision, and the
+  # first version of this read that death as a difference — failing the self-test on a repo whose
+  # only crime was being new.
+  echo "  !!   no commits yet, so there is nothing to compare the harness machinery against."
+  echo "         Commit .claude/ to make tampering detectable."
+elif ! git -C "$ROOT" diff --quiet HEAD -- .claude/scripts .claude/settings.json 2>/dev/null; then
+  echo "FAIL: .claude/scripts/ or .claude/settings.json differs from the last commit."
+  git -C "$ROOT" diff --stat HEAD -- .claude/scripts .claude/settings.json 2>/dev/null | sed 's/^/      /'
+  echo "      The gate never sees shell writes, so this is how an edit there surfaces."
+  echo "      If you changed them on purpose, commit it. If you did not, restore with:"
+  echo "          git -C \"$ROOT\" checkout HEAD -- .claude/scripts .claude/settings.json"
+  exit 1
+else
+  untracked="$(git -C "$ROOT" ls-files --others --exclude-standard -- .claude/scripts .claude/settings.json)"
+  if [ -n "$untracked" ]; then
+    echo "  !!   harness machinery is not committed yet, so nothing can be compared to it:"
+    echo "$untracked" | sed 's/^/         /'
+    echo "         Commit .claude/ to make tampering detectable."
+  else
+    ok "harness machinery matches its last commit"
+  fi
+fi
+
 # Everything above this line is the harness proving itself: the wired gate refuses what it must,
 # the dashboard renders, the vendored suite is green, and no cycle claims a completion it cannot
 # support. Past this line is the project's own toolchain, which is not the harness's to vouch for.

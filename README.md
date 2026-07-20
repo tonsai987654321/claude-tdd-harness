@@ -176,8 +176,31 @@ Tests, docs and config stay writable while it is refusing — that is the differ
 and a brick, and it is worth stating because getting the order wrong made the repo unrepairable by
 exactly the edits that repair it.
 
-The honest limit: this catches the gate *breaking*, not someone determined to evade it. `protected`
-keeps the Write tool off the verdict; nothing here gates `rm`.
+**Checked against git, so a shell write cannot hide:**
+
+| | |
+|---|---|
+| `.claude/scripts/` and `.claude/settings.json` match their last commit | `git diff HEAD`, 43ms |
+
+The gate only ever sees `Write`, `Edit`, `MultiEdit` and `NotebookEdit`. A shell command reaches the
+machinery without any hook firing — but both of those files are committed, and git remembers, so no
+shell parsing is needed to notice. A difference fails the self-test, which fails the verdict, which
+shuts the gate. Gate *state* is gitignored and cannot be checked this way; forging it still lets code
+be written, and still cannot close a cycle.
+
+**Checked where the agent does not run:**
+
+| | |
+|---|---|
+| every code commit has a test commit before it | `harness.py history <project> --repo .`, in CI |
+
+`templates/workflows/tdd-ordering.yml` — installed to `docs/ci/` — is the only check here an agent
+cannot make pass by editing the repo it is working in. It reads `git log`, which the harness never
+writes, and walks a ledger: a commit touching tests banks one, a commit touching guarded code spends
+one, and code with nothing banked fails the PR.
+
+Everything local is evidence about a cooperative agent. This is the boundary. If you only adopt one
+thing from this repo, adopt this file — it is forty lines of YAML and it does not depend on the rest.
 
 **Still only when someone runs the full `./init.sh`:**
 
