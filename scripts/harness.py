@@ -481,6 +481,22 @@ def run_suite(project: str, spec: dict, args: list[str]) -> tuple[int, str]:
 TEST_PATH = re.compile(r"(?:^|/)tests?/|[._](?:test|spec)\.[a-z]+$|(?:^|/)__tests__/")
 
 
+def exempt(cfg: dict, rel: str) -> bool:
+    """Is this path one the harness never treats as production code?
+
+    Read from the same two config keys the gate reads, deliberately in one function rather than
+    duplicated at each call site: the gate and the ledger disagreeing about what production code is
+    was the whole defect, and a second copy of the rule is how that disagreement comes back.
+
+    Exempt only means "not code". It never makes a file count as a *test* — otherwise a commit of
+    bare `__init__.py` files would bank a RED that a later untested commit could spend, and the fix
+    would become a new way to launder a violation.
+    """
+    if Path(rel).name in set(cfg["exempt_names"]):
+        return True
+    return any(re.search(p, rel) for p in cfg["exempt_patterns"])
+
+
 def cmd_history(project: str, repo: Path | None = None) -> None:
     """Check the git history for the ordering the gate exists to produce: test first, then code.
 
@@ -527,7 +543,17 @@ def cmd_history(project: str, repo: Path | None = None) -> None:
         nonlocal banked, counted
         if not sha:
             return
-        code = any(any(p.search(prefix + f) for p in patterns) for f in files)
+        # The same exemptions `cmd_gate` honours, and for the same reason. Deciding `code` from the
+        # guarded patterns alone left one harness holding two definitions of production code, with
+        # the stricter one writing the CI verdict — so a `__init__.py` created beside the test that
+        # imports through it, or a vitest suite living next to the code it covers, read as untested
+        # production code and accused a correct history.
+        #
+        # That direction matters more than it looks. Every other check here lets something wrong
+        # look right; this one made something right look wrong, in the check built to be the
+        # boundary the agent cannot cross. A red build on correct work teaches people to stop
+        # trusting the check, which costs more than the check was ever worth.
+        code = any(any(p.search(prefix + f) for p in patterns) for f in files if not exempt(cfg, f))
         tests = any(TEST_PATH.search(f) for f in files)
         if not (code or tests):
             return
