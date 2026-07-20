@@ -941,6 +941,18 @@ def fmt_tokens(n: int) -> str:
 GLYPH = {"queued": "[ ]", "red": "[R]", "green": "[G]", "done": "[x]", "blocked": "[!]"}
 
 
+def first_clause(evidence: str, width: int = 88) -> str:
+    """The opening sentence of an evidence string, safe to drop in a markdown table cell.
+
+    Evidence is free text and the board is a pipe table, so a raw `|` would split the row into
+    columns that do not exist. Escaping it as `\\|` renders correctly but still leaves the row's
+    structure depending on the text inside it; substituting is the duller, sturdier choice.
+    """
+    text = " ".join(evidence.replace("|", "/").split())
+    head = re.split(r"(?<=[.;])\s", text, maxsplit=1)[0]
+    return head if len(head) <= width else head[: width - 1] + "…"
+
+
 LOGGED_CYCLE = re.compile(r"\bcycle-(\d+)\b")
 
 
@@ -980,10 +992,20 @@ def render(project: str, stats: dict | None) -> str:
         "|---|-------|-------|-------|--------|-------|----------|",
     ]
     for c in s["cycles"]:
-        if c["state"] != "done":
-            ev = "-"
-        else:
+        if c["state"] == "done":
             ev = "yes" if c.get("evidence") else "**MISSING**"
+        elif c["state"] == "blocked" and c.get("evidence"):
+            # `cycle` stores evidence for any state that supplies one, and the column was decided on
+            # the state before it looked at the value — so a blocked cycle carrying a full account of
+            # *why* rendered as `-`. HANDOFF.md printed the reason all along, which left the two
+            # generated files disagreeing about what the reader is allowed to know, with the board
+            # CLAUDE.md points at as the stricter of the two for no stated reason.
+            #
+            # Blocked is the state where the reason is the whole point, so show it rather than
+            # asserting that one exists.
+            ev = first_clause(c["evidence"])
+        else:
+            ev = "-"
         # How much guarded code this cycle opened on one failing test. The gate is per-project, so
         # this is the number that says whether "one test" meant one behaviour or a free hand.
         touched = c.get("touched")
@@ -993,6 +1015,16 @@ def render(project: str, stats: dict | None) -> str:
             f"| {c['id']} | {title} | {GLYPH[c['state']]} {c['state']} "
             f"| {c['agent']} | {fmt_tokens(c['tokens'])} | {breadth} | {ev} |"
         )
+
+    # The cell is a table cell: it can only ever hold the opening clause, and the clause that
+    # matters is often the second one ("DoD 1-4 met. DoD 5 not met: ..."). Truncating there would
+    # reproduce the original bug in a politer font, so the full reason goes under the table, where
+    # HANDOFF.md has been printing it all along.
+    blocked = [c for c in s["cycles"] if c["state"] == "blocked" and c.get("evidence")]
+    if blocked:
+        lines += [""]
+        for c in blocked:
+            lines += [f"> **Cycle {c['id']} blocked** — {' '.join(str(c['evidence']).split())}"]
 
     if (drift := log_drift(project, s["cycles"])) is not None:
         highest_id, highest_logged = drift
