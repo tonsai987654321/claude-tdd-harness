@@ -257,6 +257,8 @@ So for any change to behaviour:
 
 Docs-only changes do not need a bump — they never reach a running session either way.
 
+`tests/test_version_bump.py` enforces step 1 rather than asking for it: once `tdd-harness--v<version>` exists, the suite fails if anything under `scripts/`, `templates/`, `.claude-plugin/`, `agents/` or `commands/` differs from that tag. Five merges once landed under `0.8.0` — a gate fix, a regression that shut every scaffolded repo's gate, and three features — with this section already written exactly as you see it. A rule in prose is a prior; the failing test is the constraint.
+
 Step 4 is not paranoia. It is what caught three fixes that had been pushed, reported green, and reached nobody. See [docs/lessons/](docs/lessons/).
 
 ## License

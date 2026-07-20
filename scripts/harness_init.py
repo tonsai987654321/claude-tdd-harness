@@ -88,8 +88,9 @@ NOT_VENDORED = {
     # untidy there, it shuts the repo down.
     "test_board_ships.py",
     "test_install_board.py",
-    # Scans this plugin's own git tree; in a scaffolded repo it grades somebody else's files.
+    # Scan this plugin's own git tree; in a scaffolded repo they grade somebody else's files.
     "test_no_thai.py",
+    "test_version_bump.py",
     # Installs the plugin into a temp dir to prove the vendored suite is green there. Vendored, it
     # would try to install a plugin that is not present, from inside the thing it is testing.
     "test_vendored_suite.py",
