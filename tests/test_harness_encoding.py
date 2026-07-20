@@ -152,7 +152,10 @@ def test_thai_evidence_round_trips_through_the_state_file(harness_root: Path) ->
     used the locale codec, so on a Thai box the record of *why* a cycle was allowed to close was
     the thing at risk -- the one piece of state the whole constitution rests on.
     """
-    evidence = "pytest 24 ผ่าน, cov 93%; ruff สะอาด; a1b2c3d [RED] · e4f5g6h [GREEN]"
+    # No SHAs: `cycle` now resolves every SHA-shaped token in evidence against the project's git,
+    # and this test's subject is the codec, not the citation. A fabricated `a1b2c3d` here would be
+    # testing the new refusal by accident and hiding a decoding bug behind it.
+    evidence = "pytest 24 ผ่าน, cov 93%; ruff สะอาด; [RED] · [GREEN] committed"
 
     done = run_harness(harness_root, "cycle", "demo-api", "1", "done", "--evidence", evidence)
     assert done.returncode == 0, done.stdout + done.stderr

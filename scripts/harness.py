@@ -682,6 +682,45 @@ def cmd_green(project: str) -> None:
 # ---------------------------------------------------------------- cycles
 
 
+# Hex-looking words are the cost of this check: a token of 7+ hex characters is a SHA by shape
+# alone, and English has a few ("defaced", "decade5"). Requiring at least one letter drops the far
+# more common false positive — a bare 7-digit number, which in an evidence string is a token count
+# or a duration, never a commit. Anything caught wrongly is repaired by rewording the evidence,
+# which is cheap; anything let through wrongly is a `done` nobody can check, which is not.
+SHA_SHAPED = re.compile(r"\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")
+
+
+def _refuse_unresolvable_shas(project: str, cycle_id: str, evidence: str) -> None:
+    shas = list(dict.fromkeys(SHA_SHAPED.findall(evidence.lower())))
+    if not shas:
+        return
+
+    d = project_dir(project)
+    if not (d / ".git").is_dir():
+        sys.exit(
+            f"REFUSED: cycle {cycle_id}'s evidence names commits ({', '.join(shas)}), "
+            f"and {project} has no git history to name them in.\n"
+            f"  Commit the failing test and the code, then close the cycle."
+        )
+
+    unresolved = [
+        s
+        for s in shas
+        if subprocess.run(
+            ["git", "-C", str(d), "cat-file", "-t", s], capture_output=True, **DECODE
+        ).returncode
+        != 0
+    ]
+    if unresolved:
+        sys.exit(
+            f"REFUSED: cycle {cycle_id}'s evidence cites {', '.join(unresolved)}, "
+            f"which resolve to nothing in {project}.\n"
+            f"  Evidence is the whole argument that this cycle happened; a SHA that does not exist "
+            f"makes it unreadable rather than merely unproven.\n"
+            f"  Cite the commits git actually has — `git log --oneline` in {d}."
+        )
+
+
 def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, evidence: str | None) -> None:
     valid = {"queued", "red", "green", "done", "blocked"}
     if new_state not in valid:
@@ -695,6 +734,17 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
             f'      harness.py cycle {project} {cycle_id} done --evidence "<runner> 24 passed, '
             f'cov 93%; quality gates clean; a1b2c3d [RED] -> e4f5g6h [GREEN]"'
         )
+
+    # Presence was the whole check, and any non-empty string satisfied it: `--evidence "yes"` closed
+    # a cycle, and so did two SHAs that exist in no repository. Evidence names commits, so resolve
+    # them. This does not make the cited commits the *right* ones — nothing here can — but it moves
+    # a fabricated SHA from undetectable to impossible, and it does so by asking git, the one store
+    # in this system the harness does not write and an agent cannot quietly amend.
+    #
+    # Refused here, before the state is loaded and long before anything is written, so a rejected
+    # `done` leaves nothing half-applied (lesson 0013).
+    if new_state == "done" and evidence:
+        _refuse_unresolvable_shas(project, cycle_id, evidence)
 
     state = load_state(project)
 
