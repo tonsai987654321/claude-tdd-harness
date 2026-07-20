@@ -1,13 +1,15 @@
 # How the harness works
 
-Six diagrams, each traced from the code rather than from the design. Where the order of two
+Seven diagrams, each traced from the code rather than from the design. Where the order of two
 checks matters, the order here is the order in the source.
 
 - [1. The gate](#1-the-gate--pretooluse) — the one mechanism everything else exists to support
 - [2. One TDD cycle](#2-one-tdd-cycle) — how the gate opens and shuts
-- [3. Closing a cycle](#3-closing-a-cycle) — the three refusals
+- [3. Closing a cycle](#3-closing-a-cycle) — the four refusals
 - [4. Install and re-sync](#4-install-and-re-sync) — who owns which file
 - [5. `init.sh`](#5-initsh) — the verification order, which is load-bearing
+- [6. What drives what](#6-what-drives-what) — the config keys, and what each one decides
+- [7. The trust boundary](#7-where-each-check-runs--the-trust-boundary) — which checks an agent can step around
 
 ---
 
@@ -117,7 +119,7 @@ flowchart TD
 
 ## 3. Closing a cycle
 
-`done` is where the claim is made, so it is where all three refusals live. None is in `green`:
+`done` is where the claim is made, so it is where all four refusals live. None is in `green`:
 coverage climbing toward the gate is the normal shape of a cycle, and refusing there would fight
 the work rather than the claim.
 
@@ -125,20 +127,28 @@ the work rather than the claim.
 flowchart TD
     A["harness.py cycle PROJECT ID done"] --> B{"--evidence given?"}
     B -- no --> R1["REFUSED — 'a done nobody can check<br/>is indistinguishable from a lie'"]
-    B -- yes --> G{"is the test that opened<br/>the gate in any commit?"}
+    B -- yes --> N{"cycle file declares a first_test,<br/>but no RED is on record?"}
+    N -- yes --> R4["REFUSED — the gate was never opened,<br/>or the state saying so was replaced"]
+    N -- no --> G{"is the test that opened<br/>the gate in any commit?"}
     G -- no --> R3["REFUSED — the history does not show<br/>the order the gate exists to prove"]
-    G -- "yes, or no test recorded" --> C{"recorded coverage<br/>below coverage_gate?"}
+    G -- "yes, or none declared" --> C{"recorded coverage<br/>below coverage_gate?"}
     C -- "yes — e.g. 71% vs 90%" --> R2["REFUSED — cover it, or change<br/>the gate deliberately"]
     C -- "no, or never measured" --> D["state = done<br/>evidence + verified_at recorded"]
 
     style R1 fill:#7f1d1d,stroke:#ef4444,color:#fff
     style R2 fill:#7f1d1d,stroke:#ef4444,color:#fff
     style R3 fill:#7f1d1d,stroke:#ef4444,color:#fff
+    style R4 fill:#7f1d1d,stroke:#ef4444,color:#fff
     style D fill:#14532d,stroke:#22c55e,color:#fff
 ```
 
-Unmeasured coverage does not block: cycle 0 is scaffolding and runs no suite, and the evidence
-rule already stands between an unmeasured cycle and a silent close.
+Unmeasured coverage does not block: cycle 0 is scaffolding and runs no suite, and the evidence rule
+already stands between an unmeasured cycle and a silent close.
+
+The `first_test` check exists because the git check could be skipped by deleting what it reads.
+State written by hand that simply omitted the recorded test closed a cycle with no refusal at all —
+a check that runs only when its data is present is a check anyone skips by removing the data. The
+cycle file is the user's own declaration, so the absence became evidence instead of an exemption.
 
 ---
 
@@ -187,7 +197,7 @@ aborted before the gate was ever verified.
 
 ```mermaid
 flowchart TD
-    A["./init.sh"] --> B["Harness prerequisites<br/>python3, uv — hardcoded, not from config"]
+    A["./init.sh --gate-only --quiet<br/>SessionStart runs this every session"] --> B["Harness prerequisites<br/>uv — offered for install if missing.<br/>python3 comes from uv when absent"]
     B --> C["read the gate command out of<br/>.claude/settings.json"]
     C --> C1{"a PreToolUse<br/>gate hook exists?"}
     C1 -- no --> F1["FAIL — 'nothing is guarding this repo'"]
@@ -196,23 +206,39 @@ flowchart TD
     D1 -- no --> F2["FAIL — the gate has stopped biting"]
     D1 -- yes --> E["dashboard renders"]
     E --> G["run the vendored harness suite<br/>unconditionally — a missing one is a broken install"]
-    G --> H["Unproven completions<br/>done without evidence → FAIL<br/>done under coverage_gate → FAIL"]
-    H --> I["Project tooling<br/>requires from harness.json:<br/>docker daemon, gh auth, node …"]
+    G --> M{"do .claude/scripts/ and settings.json<br/>match their last commit?"}
+    M -- differ --> F3["FAIL — something wrote them<br/>through the shell, where no hook looks"]
+    M -- "no git, or nothing committed" --> W["!! unverifiable — said out loud,<br/>even under --quiet"]
+    M -- match --> H
+    W --> H
+    H["Unproven completions<br/>done without evidence → FAIL<br/>done under coverage_gate → FAIL"] --> GV["write the verdict to<br/>.claude/state/.selftest.json<br/>— the gate reads it"]
+    GV --> GO{"--gate-only?"}
+    GO -- yes --> K
+    GO -- no --> I["Project tooling<br/>requires from harness.json:<br/>docker daemon, gh auth, node …"]
     I --> J["Project suites — one per cycle file<br/>harness.py quality + harness.py suite"]
     J --> K(["verified"])
 
     style F1 fill:#7f1d1d,stroke:#ef4444,color:#fff
     style F2 fill:#7f1d1d,stroke:#ef4444,color:#fff
+    style F3 fill:#7f1d1d,stroke:#ef4444,color:#fff
+    style W fill:#78350f,stroke:#f59e0b,color:#fff
     style D fill:#1e3a5f,stroke:#3b82f6,color:#fff
+    style GV fill:#1e3a5f,stroke:#3b82f6,color:#fff
     style K fill:#14532d,stroke:#22c55e,color:#fff
 ```
 
 `suite`, not `green`: `green` shuts the gate on success, so running the health check in the middle
 of a RED cycle would revoke the write permission that cycle legitimately holds.
 
+The verdict is what makes this more than a report. Everything above `--gate-only` runs in ~0.3s on
+every session start, and the gate refuses production code while the verdict says the harness is
+broken — but *after* the exemptions, so tests and config stay writable. That ordering is the
+difference between a brake and a brick, and getting it wrong made the repo unrepairable by exactly
+the edits that repair it ([lesson 0013](lessons/0013-the-order-of-a-refusal-decides-whether-it-is-repairable.md)).
+
 ---
 
-## What drives what
+## 6. What drives what
 
 Nothing outside `.claude/harness.json` names a tool. That is the property that lets a project on
 poetry, pyright, golangci-lint or cargo change one file and nothing else.
@@ -229,6 +255,8 @@ flowchart LR
     CFG --> G5["init.sh project tooling — requires"]
     CFG --> G6["the agents' stack — stack"]
     CFG --> G7["link_projects.sh — owner, projects_dir"]
+    CFG --> G8["the harness's own machinery — protected"]
+    CFG --> G9["CI's ledger — guarded, via harness.py history"]
 
     CYC --> C1["which runner this project uses"]
     CYC --> C2["coverage_gate — enforced at done"]
@@ -237,3 +265,57 @@ flowchart LR
     style CFG fill:#1e3a5f,stroke:#3b82f6,color:#fff
     style CYC fill:#1e3a5f,stroke:#3b82f6,color:#fff
 ```
+
+---
+
+## 7. Where each check runs — the trust boundary
+
+This is the diagram to read if you only read one. Everything on the left runs on the machine the
+agent runs on, reads state the agent can reach, and is therefore *evidence about a cooperative
+agent*. Only the right-hand side is a boundary.
+
+```mermaid
+flowchart LR
+    subgraph LOCAL["on the agent's machine — evidence"]
+        direction TB
+        G1["gate: refuses production code<br/>while the gate is SHUT"]
+        G2["gate: refuses .claude/state/, scripts/, settings.json<br/>whatever the gate says"]
+        G3["red: refuses a passing test,<br/>and a run that never happened"]
+        G4["done: evidence · RED on record ·<br/>test in git · coverage gate"]
+        G5["init.sh --gate-only, every session:<br/>probes · vendored suite · machinery vs HEAD"]
+    end
+
+    subgraph SHELL["what the shell reaches anyway"]
+        direction TB
+        S1["rm / echo &gt; / sed -i / python -c<br/>never pass through a PreToolUse hook"]
+        S2["…so .claude/state/ can be forged.<br/>Code gets written; the cycle still cannot close."]
+        S3["…but .claude/scripts/ and settings.json<br/>are committed, so init.sh sees the difference"]
+    end
+
+    subgraph CI["off the machine — boundary"]
+        direction TB
+        C1["harness.py history --repo .<br/>reads git log, which the harness never writes"]
+        C2["a commit touching tests banks one;<br/>a commit touching guarded code spends one"]
+        C3["code with nothing banked fails the PR"]
+    end
+
+    LOCAL -.->|"a determined agent<br/>steps around"| SHELL
+    SHELL -.->|"and this is where<br/>it stops"| CI
+
+    style LOCAL fill:#1e3a5f,stroke:#3b82f6,color:#fff
+    style SHELL fill:#78350f,stroke:#f59e0b,color:#fff
+    style CI fill:#14532d,stroke:#22c55e,color:#fff
+```
+
+Three honest statements follow from it:
+
+1. **The local gate is not a security boundary.** An agent that can run `Bash` has the user's
+   permissions. It defends against drift and shortcuts, which is what actually happens, not against
+   an adversary.
+2. **The two halves of `protected` differ.** `.claude/scripts/` and `settings.json` are committed,
+   so a shell write to them is caught in 43ms by comparing against `HEAD`. `.claude/state/` is
+   gitignored and gets nothing — forging it buys writing code without a test, and buys no closed
+   cycle.
+3. **`tdd-ordering.yml` is the part that does not depend on the rest.** Forty lines of YAML, one
+   `git log` walk, running where the branch cannot edit the verdict. If you adopt one thing from
+   this repo, adopt that file.
