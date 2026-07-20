@@ -364,15 +364,17 @@ def append_gitignore(root: Path) -> str:
     block = (TEMPLATES / "gitignore.append").read_text(encoding="utf-8")
     existing = path.read_text(encoding="utf-8") if path.exists() else ""
 
-    if "--- TDD harness ---" not in existing:
-        path.write_text(existing + block, encoding="utf-8", newline="\n")
-        return "++ .gitignore (harness block appended)"
-
     # Lines the harness used to write and no longer does. Reported, never removed: the top-up below
     # adds what a repo is missing, and its failure mode is ignoring too much. Deleting an ignore
     # rule has the opposite failure mode — committing a file someone deliberately hid — and an
     # installer that can do that on its own is one that can eventually do it to a rule it did not
     # write. Not worth automating to save a line of hand-editing.
+    #
+    # Checked before the marker branch below, not after it. Sitting after the early return, this
+    # never ran for a .gitignore with no harness marker — hand-written, or from a version before
+    # the marker existed — which is precisely the repo carrying a retired rule. That repo then got
+    # the old ignore line *and* an appended comment saying the board is deliberately not ignored:
+    # a file contradicting itself, with the one message that explains it suppressed.
     retired = [line for line in RETIRED_IGNORES if line in {ln.strip() for ln in existing.splitlines()}]
     if retired:
         print(
@@ -382,6 +384,10 @@ def append_gitignore(root: Path) -> str:
             f"   Remove the line(s) by hand if you want it to ship — this installer will not edit "
             f"an ignore rule out from under you."
         )
+
+    if "--- TDD harness ---" not in existing:
+        path.write_text(existing + block, encoding="utf-8", newline="\n")
+        return "++ .gitignore (harness block appended)"
 
     have = {line.strip() for line in existing.splitlines()}
     missing = [
