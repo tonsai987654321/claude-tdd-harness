@@ -74,3 +74,22 @@ def test_a_repo_that_does_not_hide_the_board_is_not_nagged(repo: Path) -> None:
     out = install(repo).stdout
 
     assert "no longer" not in out.lower(), f"warned about a rule the repo does not have:\n{out}"
+
+
+def test_an_older_repo_without_the_marker_is_still_told(repo: Path) -> None:
+    """The repo that most needs the warning was the one that never got it.
+
+    `append_gitignore` returns early when the harness marker is absent, appending the whole block.
+    The retirement notice sat after that return, so a repo whose .gitignore predates the marker --
+    hand-written, or from a version before it existed -- kept hiding PROGRESS.md and heard nothing.
+    It then ended up with the old ignore line *and* a new comment saying the board is deliberately
+    not ignored: a file that contradicts itself and never explains why.
+    """
+    gitignore = repo / ".gitignore"
+    gitignore.write_text("node_modules\nPROGRESS.md\n", encoding="utf-8")
+
+    out = install(repo).stdout
+
+    assert "PROGRESS.md" in out and "no longer" in out.lower(), (
+        f"a repo with no harness marker kept hiding the board and was told nothing:\n{out}"
+    )
