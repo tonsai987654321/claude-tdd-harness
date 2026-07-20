@@ -201,18 +201,68 @@ def state_path(project: str) -> Path:
     return STATE_DIR / f"{project}.json"
 
 
+def _queued_row(c: dict) -> dict:
+    return {"id": c["id"], "title": c["title"], "state": "queued", "agent": "-", "tokens": 0, "evidence": ""}
+
+
 def load_state(project: str) -> dict:
-    p = state_path(project)
-    if p.exists():
-        return json.loads(p.read_text(encoding="utf-8"))
-    cycles = []
+    """Seed from the cycle file, then reconcile against it on *every* load.
+
+    Seeding only on first write was the shape that made the board lie without anyone touching it:
+    once the state file existed it was returned verbatim, so a cycle appended to the cycle file
+    afterwards had no row, could not be marked anything, and rendered nowhere -- while the board
+    read `n/n` with every row accounted for. Nothing looked wrong, which is the expensive kind of
+    wrong.
+
+    So this is a left join, not a replace. Rows already in the state win on every field, because
+    they carry what happened; the cycle file only decides which ids exist and supplies titles for
+    ids the state has never seen. An id the state holds and the cycle file no longer defines is
+    flagged `orphan` rather than dropped -- it may carry evidence of work that really happened, and
+    deleting a record to make two files agree is the same lie in the other direction.
+    """
     seed = CYCLE_DIR / f"{project}.json"
+    declared = []
     if seed.exists():
-        cycles = [
-            {"id": c["id"], "title": c["title"], "state": "queued", "agent": "-", "tokens": 0, "evidence": ""}
-            for c in json.loads(seed.read_text(encoding="utf-8"))["cycles"]
-        ]
-    return {"project": project, "gate": {"state": "SHUT"}, "coverage": None, "cycles": cycles}
+        try:
+            declared = json.loads(seed.read_text(encoding="utf-8"))["cycles"]
+        except (json.JSONDecodeError, KeyError, OSError):
+            declared = []
+
+    p = state_path(project)
+    if not p.exists():
+        return {
+            "project": project,
+            "gate": {"state": "SHUT"},
+            "coverage": None,
+            "cycles": [_queued_row(c) for c in declared],
+        }
+
+    state = json.loads(p.read_text(encoding="utf-8"))
+    if not seed.exists():
+        # No declaration to reconcile against. Absence of the cycle file is not evidence that every
+        # cycle was withdrawn, so flag nothing.
+        return state
+
+    by_id = {str(c["id"]): c for c in state.get("cycles") or []}
+    declared_ids = {str(c["id"]) for c in declared}
+    reconciled = []
+    for c in declared:
+        row = by_id.get(str(c["id"]))
+        if row is None:
+            reconciled.append(_queued_row(c))
+            continue
+        row.pop("orphan", None)  # re-declared: it is a normal cycle again
+        row.setdefault("title", c["title"])
+        reconciled.append(row)
+
+    # Keep orphans, in their original relative order, after the declared ones.
+    for row in state.get("cycles") or []:
+        if str(row["id"]) not in declared_ids:
+            row["orphan"] = True
+            reconciled.append(row)
+
+    state["cycles"] = reconciled
+    return state
 
 
 def save_state(project: str, state: dict) -> None:
@@ -865,10 +915,21 @@ def render(project: str, stats: dict | None) -> str:
         # this is the number that says whether "one test" meant one behaviour or a free hand.
         touched = c.get("touched")
         breadth = str(len(touched)) if touched else ("-" if c["state"] != "done" else "0")
+        title = f"{c['title']} _(orphan)_" if c.get("orphan") else c["title"]
         lines.append(
-            f"| {c['id']} | {c['title']} | {GLYPH[c['state']]} {c['state']} "
+            f"| {c['id']} | {title} | {GLYPH[c['state']]} {c['state']} "
             f"| {c['agent']} | {fmt_tokens(c['tokens'])} | {breadth} | {ev} |"
         )
+
+    orphans = [c for c in s["cycles"] if c.get("orphan")]
+    if orphans:
+        ids = ", ".join(str(c["id"]) for c in orphans)
+        lines += [
+            "",
+            f"> **Orphan cycle(s) {ids}**: the state records them, `.claude/cycles/{project}.json` "
+            f"no longer defines them. Either the cycle file lost an entry it should still have, or "
+            f"these rows describe work that is no longer in the plan. Reconcile deliberately.",
+        ]
 
     if unproven:
         ids = ", ".join(str(c["id"]) for c in unproven)
