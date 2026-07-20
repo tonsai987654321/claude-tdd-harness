@@ -723,6 +723,65 @@ def _refuse_unresolvable_shas(project: str, cycle_id: str, evidence: str) -> Non
         )
 
 
+def declared_dependencies(project: str, cycle_id: str) -> list[str]:
+    declared = next(
+        (c for c in (project_config(project).get("cycles") or []) if str(c.get("id")) == str(cycle_id)),
+        {},
+    )
+    return [str(d) for d in (declared.get("depends_on") or [])]
+
+
+def _refuse_unmet_dependencies(project: str, cycle_id: str) -> None:
+    """Refuse a `done` whose declared dependencies are not themselves `done`.
+
+    CLAUDE.md has always said "never skip: later tests depend on earlier code", which is a real
+    constraint stated where nothing can enforce it. `build_order` orders projects; between the
+    cycles of one project there was nothing, so a cycle could close while the code it was built on
+    was still queued and the board would report both faithfully.
+
+    A rule that lives in a paragraph is a prior, not a constraint — this harness's own argument,
+    applied to itself.
+    """
+    deps = declared_dependencies(project, cycle_id)
+    if not deps:
+        return
+
+    if str(cycle_id) in deps:
+        sys.exit(
+            f"REFUSED: cycle {cycle_id} declares itself as its own dependency.\n"
+            f"  It could never be closed, and nothing would say why.\n"
+            f"  Fix depends_on in .claude/cycles/{project}.json."
+        )
+
+    defined = {str(c.get("id")) for c in (project_config(project).get("cycles") or [])}
+    # Louder than an unmet dependency, and deliberately: an unmet one is the normal state of work in
+    # progress, while a dependency on an id that does not exist is a typo satisfied by nothing
+    # forever — a check that passes because its subject is missing, the shape of every fail-open bug
+    # on record here.
+    if dangling := [d for d in deps if d not in defined]:
+        sys.exit(
+            f"REFUSED: cycle {cycle_id} depends on cycle(s) {', '.join(dangling)}, "
+            f"which {project} does not define.\n"
+            f"  A dependency on a cycle that does not exist is satisfied by nothing, forever — it "
+            f"would have passed silently.\n"
+            f"  Fix depends_on in .claude/cycles/{project}.json."
+        )
+
+    by_id = {str(c["id"]): c for c in load_state(project)["cycles"]}
+    # `green` means the code works; `done` means the cycle was accepted on evidence. A dependency
+    # waits for the second, or "depends on" would mean nothing stronger than "ran once".
+    unmet = [d for d in deps if by_id.get(d, {}).get("state") != "done"]
+    if unmet:
+        listed = ", ".join(f"cycle {d} ({by_id.get(d, {}).get('state', 'unknown')})" for d in unmet)
+        sys.exit(
+            f"REFUSED: cycle {cycle_id} depends on {listed}, which {'is' if len(unmet) == 1 else 'are'} "
+            f"not done.\n"
+            f"  Closing it now would put a finished mark on work built over code nobody has "
+            f"accepted yet.\n"
+            f"  Close the dependencies first, or drop them from depends_on if they are not real."
+        )
+
+
 def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, evidence: str | None) -> None:
     valid = {"queued", "red", "green", "done", "blocked"}
     if new_state not in valid:
@@ -747,6 +806,9 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
     # `done` leaves nothing half-applied (lesson 0013).
     if new_state == "done" and evidence:
         _refuse_unresolvable_shas(project, cycle_id, evidence)
+
+    if new_state == "done":
+        _refuse_unmet_dependencies(project, cycle_id)
 
     state = load_state(project)
 
@@ -1013,6 +1075,17 @@ def render(project: str, stats: dict | None) -> str:
         touched = c.get("touched")
         breadth = str(len(touched)) if touched else ("-" if c["state"] != "done" else "0")
         title = f"{c['title']} _(orphan)_" if c.get("orphan") else c["title"]
+        # What this cycle is waiting on, shown where the waiting is visible. Three queued rows and
+        # no hint that two of them cannot start is a board that reports faithfully and explains
+        # nothing.
+        if c["state"] != "done":
+            pending = [
+                d
+                for d in declared_dependencies(project, str(c["id"]))
+                if next((r for r in s["cycles"] if str(r["id"]) == d), {}).get("state") != "done"
+            ]
+            if pending:
+                title += f" _(needs {', '.join('cycle ' + d for d in pending)})_"
         lines.append(
             f"| {c['id']} | {title} | {GLYPH[c['state']]} {c['state']} "
             f"| {c['agent']} | {fmt_tokens(c['tokens'])} | {breadth} | {ev} |"

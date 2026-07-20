@@ -397,6 +397,11 @@ def cycle_stub(project: Project, order: int) -> str:
                 "id": 1,
                 "title": "TODO: the first behaviour, named as a behaviour and not as a class",
                 "first_test": "tests/test_todo.py" if project.runner == "pytest" else "src/todo.test.ts",
+                # Optional, and shown here because a feature nobody knows about is a feature that
+                # does not exist. `done` is refused while a listed cycle is not itself `done`, and
+                # next_cycle.py will not dispatch a cycle whose dependencies are open — so the
+                # ordering rule stops being a sentence in CLAUDE.md and starts being a refusal.
+                "depends_on": [0],
             },
         ],
     }
