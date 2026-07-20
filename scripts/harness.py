@@ -18,6 +18,8 @@ Subcommands
     handoff   Write HANDOFF.md: next action, blockers, where each project stands.
     lessons   One line per live lesson. Read this, then open only the ones that apply.
     adrs      One line per accepted ADR. Superseded ones are history, not guidance.
+    version   Which plugin version this .claude/ came from, and whether it is behind.
+    reconcile Rebuild a lost state file from a project's git log. Stops at `green`.
 """
 
 from __future__ import annotations
@@ -201,18 +203,68 @@ def state_path(project: str) -> Path:
     return STATE_DIR / f"{project}.json"
 
 
+def _queued_row(c: dict) -> dict:
+    return {"id": c["id"], "title": c["title"], "state": "queued", "agent": "-", "tokens": 0, "evidence": ""}
+
+
 def load_state(project: str) -> dict:
-    p = state_path(project)
-    if p.exists():
-        return json.loads(p.read_text(encoding="utf-8"))
-    cycles = []
+    """Seed from the cycle file, then reconcile against it on *every* load.
+
+    Seeding only on first write was the shape that made the board lie without anyone touching it:
+    once the state file existed it was returned verbatim, so a cycle appended to the cycle file
+    afterwards had no row, could not be marked anything, and rendered nowhere -- while the board
+    read `n/n` with every row accounted for. Nothing looked wrong, which is the expensive kind of
+    wrong.
+
+    So this is a left join, not a replace. Rows already in the state win on every field, because
+    they carry what happened; the cycle file only decides which ids exist and supplies titles for
+    ids the state has never seen. An id the state holds and the cycle file no longer defines is
+    flagged `orphan` rather than dropped -- it may carry evidence of work that really happened, and
+    deleting a record to make two files agree is the same lie in the other direction.
+    """
     seed = CYCLE_DIR / f"{project}.json"
+    declared = []
     if seed.exists():
-        cycles = [
-            {"id": c["id"], "title": c["title"], "state": "queued", "agent": "-", "tokens": 0, "evidence": ""}
-            for c in json.loads(seed.read_text(encoding="utf-8"))["cycles"]
-        ]
-    return {"project": project, "gate": {"state": "SHUT"}, "coverage": None, "cycles": cycles}
+        try:
+            declared = json.loads(seed.read_text(encoding="utf-8"))["cycles"]
+        except (json.JSONDecodeError, KeyError, OSError):
+            declared = []
+
+    p = state_path(project)
+    if not p.exists():
+        return {
+            "project": project,
+            "gate": {"state": "SHUT"},
+            "coverage": None,
+            "cycles": [_queued_row(c) for c in declared],
+        }
+
+    state = json.loads(p.read_text(encoding="utf-8"))
+    if not seed.exists():
+        # No declaration to reconcile against. Absence of the cycle file is not evidence that every
+        # cycle was withdrawn, so flag nothing.
+        return state
+
+    by_id = {str(c["id"]): c for c in state.get("cycles") or []}
+    declared_ids = {str(c["id"]) for c in declared}
+    reconciled = []
+    for c in declared:
+        row = by_id.get(str(c["id"]))
+        if row is None:
+            reconciled.append(_queued_row(c))
+            continue
+        row.pop("orphan", None)  # re-declared: it is a normal cycle again
+        row.setdefault("title", c["title"])
+        reconciled.append(row)
+
+    # Keep orphans, in their original relative order, after the declared ones.
+    for row in state.get("cycles") or []:
+        if str(row["id"]) not in declared_ids:
+            row["orphan"] = True
+            reconciled.append(row)
+
+    state["cycles"] = reconciled
+    return state
 
 
 def save_state(project: str, state: dict) -> None:
@@ -632,6 +684,45 @@ def cmd_green(project: str) -> None:
 # ---------------------------------------------------------------- cycles
 
 
+# Hex-looking words are the cost of this check: a token of 7+ hex characters is a SHA by shape
+# alone, and English has a few ("defaced", "decade5"). Requiring at least one letter drops the far
+# more common false positive — a bare 7-digit number, which in an evidence string is a token count
+# or a duration, never a commit. Anything caught wrongly is repaired by rewording the evidence,
+# which is cheap; anything let through wrongly is a `done` nobody can check, which is not.
+SHA_SHAPED = re.compile(r"\b(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}\b")
+
+
+def _refuse_unresolvable_shas(project: str, cycle_id: str, evidence: str) -> None:
+    shas = list(dict.fromkeys(SHA_SHAPED.findall(evidence.lower())))
+    if not shas:
+        return
+
+    d = project_dir(project)
+    if not (d / ".git").is_dir():
+        sys.exit(
+            f"REFUSED: cycle {cycle_id}'s evidence names commits ({', '.join(shas)}), "
+            f"and {project} has no git history to name them in.\n"
+            f"  Commit the failing test and the code, then close the cycle."
+        )
+
+    unresolved = [
+        s
+        for s in shas
+        if subprocess.run(
+            ["git", "-C", str(d), "cat-file", "-t", s], capture_output=True, **DECODE
+        ).returncode
+        != 0
+    ]
+    if unresolved:
+        sys.exit(
+            f"REFUSED: cycle {cycle_id}'s evidence cites {', '.join(unresolved)}, "
+            f"which resolve to nothing in {project}.\n"
+            f"  Evidence is the whole argument that this cycle happened; a SHA that does not exist "
+            f"makes it unreadable rather than merely unproven.\n"
+            f"  Cite the commits git actually has — `git log --oneline` in {d}."
+        )
+
+
 def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, evidence: str | None) -> None:
     valid = {"queued", "red", "green", "done", "blocked"}
     if new_state not in valid:
@@ -645,6 +736,17 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
             f'      harness.py cycle {project} {cycle_id} done --evidence "<runner> 24 passed, '
             f'cov 93%; quality gates clean; a1b2c3d [RED] -> e4f5g6h [GREEN]"'
         )
+
+    # Presence was the whole check, and any non-empty string satisfied it: `--evidence "yes"` closed
+    # a cycle, and so did two SHAs that exist in no repository. Evidence names commits, so resolve
+    # them. This does not make the cited commits the *right* ones — nothing here can — but it moves
+    # a fabricated SHA from undetectable to impossible, and it does so by asking git, the one store
+    # in this system the harness does not write and an agent cannot quietly amend.
+    #
+    # Refused here, before the state is loaded and long before anything is written, so a rejected
+    # `done` leaves nothing half-applied (lesson 0013).
+    if new_state == "done" and evidence:
+        _refuse_unresolvable_shas(project, cycle_id, evidence)
 
     state = load_state(project)
 
@@ -841,6 +943,41 @@ def fmt_tokens(n: int) -> str:
 GLYPH = {"queued": "[ ]", "red": "[R]", "green": "[G]", "done": "[x]", "blocked": "[!]"}
 
 
+def first_clause(evidence: str, width: int = 88) -> str:
+    """The opening sentence of an evidence string, safe to drop in a markdown table cell.
+
+    Evidence is free text and the board is a pipe table, so a raw `|` would split the row into
+    columns that do not exist. Escaping it as `\\|` renders correctly but still leaves the row's
+    structure depending on the text inside it; substituting is the duller, sturdier choice.
+    """
+    text = " ".join(evidence.replace("|", "/").split())
+    head = re.split(r"(?<=[.;])\s", text, maxsplit=1)[0]
+    return head if len(head) <= width else head[: width - 1] + "…"
+
+
+LOGGED_CYCLE = re.compile(r"\bcycle-(\d+)\b")
+
+
+def log_drift(project: str, cycles: list[dict]) -> tuple[int, int] | None:
+    """`(highest defined id, highest id in the log)` when the log has run past the cycle file.
+
+    The cycle file records what was *planned*; the log records what happened. When they diverge the
+    board is not wrong about anything it says — every number on it is internally consistent with the
+    file it read — which is precisely why nobody notices. So compare against the record the harness
+    does not write.
+    """
+    ids = [int(c["id"]) for c in cycles if str(c["id"]).lstrip("-").isdigit()]
+    if not ids:
+        return None
+    subjects = git(project, "log", "--all", "--format=%s")
+    if not subjects:
+        return None
+    logged = [int(n) for n in LOGGED_CYCLE.findall(subjects)]
+    if not logged:
+        return None
+    return (max(ids), max(logged)) if max(logged) > max(ids) else None
+
+
 def render(project: str, stats: dict | None) -> str:
     s = load_state(project)
     gate = s["gate"]["state"]
@@ -857,18 +994,59 @@ def render(project: str, stats: dict | None) -> str:
         "|---|-------|-------|-------|--------|-------|----------|",
     ]
     for c in s["cycles"]:
-        if c["state"] != "done":
-            ev = "-"
-        else:
+        if c["state"] == "done":
             ev = "yes" if c.get("evidence") else "**MISSING**"
+        elif c["state"] == "blocked" and c.get("evidence"):
+            # `cycle` stores evidence for any state that supplies one, and the column was decided on
+            # the state before it looked at the value — so a blocked cycle carrying a full account of
+            # *why* rendered as `-`. HANDOFF.md printed the reason all along, which left the two
+            # generated files disagreeing about what the reader is allowed to know, with the board
+            # CLAUDE.md points at as the stricter of the two for no stated reason.
+            #
+            # Blocked is the state where the reason is the whole point, so show it rather than
+            # asserting that one exists.
+            ev = first_clause(c["evidence"])
+        else:
+            ev = "-"
         # How much guarded code this cycle opened on one failing test. The gate is per-project, so
         # this is the number that says whether "one test" meant one behaviour or a free hand.
         touched = c.get("touched")
         breadth = str(len(touched)) if touched else ("-" if c["state"] != "done" else "0")
+        title = f"{c['title']} _(orphan)_" if c.get("orphan") else c["title"]
         lines.append(
-            f"| {c['id']} | {c['title']} | {GLYPH[c['state']]} {c['state']} "
+            f"| {c['id']} | {title} | {GLYPH[c['state']]} {c['state']} "
             f"| {c['agent']} | {fmt_tokens(c['tokens'])} | {breadth} | {ev} |"
         )
+
+    # The cell is a table cell: it can only ever hold the opening clause, and the clause that
+    # matters is often the second one ("DoD 1-4 met. DoD 5 not met: ..."). Truncating there would
+    # reproduce the original bug in a politer font, so the full reason goes under the table, where
+    # HANDOFF.md has been printing it all along.
+    blocked = [c for c in s["cycles"] if c["state"] == "blocked" and c.get("evidence")]
+    if blocked:
+        lines += [""]
+        for c in blocked:
+            lines += [f"> **Cycle {c['id']} blocked** — {' '.join(str(c['evidence']).split())}"]
+
+    if (drift := log_drift(project, s["cycles"])) is not None:
+        highest_id, highest_logged = drift
+        lines += [
+            "",
+            f"> **Cycle file behind the log**: `.claude/cycles/{project}.json` defines up to id "
+            f"{highest_id}, and the log carries `cycle-{highest_logged}`. The board can only ever "
+            f"render `n/{len(s['cycles'])}` — it is not lying, it is reporting faithfully on a file "
+            f"that stopped describing the project. Add the missing cycles to the cycle file.",
+        ]
+
+    orphans = [c for c in s["cycles"] if c.get("orphan")]
+    if orphans:
+        ids = ", ".join(str(c["id"]) for c in orphans)
+        lines += [
+            "",
+            f"> **Orphan cycle(s) {ids}**: the state records them, `.claude/cycles/{project}.json` "
+            f"no longer defines them. Either the cycle file lost an entry it should still have, or "
+            f"these rows describe work that is no longer in the plan. Reconcile deliberately.",
+        ]
 
     if unproven:
         ids = ", ".join(str(c["id"]) for c in unproven)
@@ -1114,6 +1292,143 @@ def cmd_stats(write: bool) -> None:
 # ---------------------------------------------------------------- entry
 
 
+def cmd_reconcile(project: str, write: bool) -> None:
+    """Rebuild what the git log can prove about a project's cycles.
+
+    `.claude/state/` is machine-local, so a fresh clone renders zeros against a finished repo.
+    Recovering from that took two rounds of subagent auditing, four suite runs and an auditor pass —
+    and every fact needed was already in the log, where `history` already goes for ordering.
+
+    What it will not do is the point. A `[RED]` commit followed by a `[GREEN]` commit proves the
+    order the gate exists to prove. It does not prove the suite passes now, that coverage clears the
+    gate, or that the quality gates ever ran — and those are what `done` asserts. So this stops at
+    `green`. A reconcile that wrote `done` from the log alone would be the same failure the rest of
+    this branch attacks, with the harness itself as the author.
+    """
+    if not (project_dir(project) / ".git").is_dir():
+        sys.exit(
+            f"cannot reconcile {project}: no git history at {project_dir(project).as_posix()}.\n"
+            f"  The log is the only record this rebuilds from. Clone the project first "
+            f"(link_projects.sh)."
+        )
+
+    # Oldest first, so the last commit seen for a cycle is the one that closed it.
+    log = git(project, "log", "--reverse", "--format=%h%x00%s")
+    seen: dict[str, dict[str, str]] = {}
+    for line in log.splitlines():
+        sha, _, subject = line.partition("\0")
+        m = LOGGED_CYCLE.search(subject)
+        if not m:
+            continue
+        half = "GREEN" if "[GREEN]" in subject else ("RED" if "[RED]" in subject else None)
+        if half:
+            seen.setdefault(m.group(1), {})[half] = sha
+
+    state = load_state(project)
+    changes, skipped = [], []
+    for c in state["cycles"]:
+        found = seen.get(str(c["id"]))
+        if not found:
+            continue
+        # `done` is a claim somebody made after watching something run. The log cannot re-derive it,
+        # so it must not overwrite it — and the evidence attached to it even less.
+        if c["state"] == "done":
+            skipped.append(str(c["id"]))
+            continue
+        rebuilt = "green" if "GREEN" in found else "red"
+        evidence = "; ".join(f"{found[h]} [{h}]" for h in ("RED", "GREEN") if h in found)
+        changes.append((c["id"], c["state"], rebuilt, evidence))
+        if write:
+            c["state"] = rebuilt
+            c["evidence"] = f"reconciled from {project} git log: {evidence}"
+            c["verified_at"] = time.strftime("%Y-%m-%d %H:%M")
+
+    if not changes:
+        print(f"{project}: nothing to reconcile — the log adds nothing the state does not have.")
+    for cycle_id, was, now, evidence in changes:
+        print(f"  cycle-{cycle_id}  {was} -> {now}   {evidence}")
+    if skipped:
+        print(f"  left alone: cycle(s) {', '.join(skipped)} are already `done` on evidence somebody observed.")
+
+    if changes:
+        print(
+            "\nRebuilt to `green`, never to `done`. The log proves a failing test preceded the code; "
+            "it does not\nprove the suite passes now, that coverage clears the gate, or that the "
+            "quality gates ran — which is\nwhat `done` asserts. Run the suite, then close each cycle "
+            "with what you watched it print."
+        )
+    if changes and not write:
+        print("\nNothing written. Re-run with --write to apply.")
+    if write:
+        save_state(project, state)
+
+
+def installed_plugin_version() -> str | None:
+    """The version of the tdd-harness plugin installed on this machine, if there is one.
+
+    `None` means no plugin was found, which is not the same as being behind: a clone on a machine
+    that never installed the plugin is unmanaged, and warning it about drift it cannot act on is how
+    a warning becomes noise people learn to skip.
+    """
+    candidates = []
+    if root := os.environ.get("CLAUDE_PLUGIN_ROOT"):
+        candidates.append(Path(root) / ".claude-plugin" / "plugin.json")
+    candidates += sorted(
+        (Path.home() / ".claude" / "plugins" / "cache").glob("*/tdd-harness/*/.claude-plugin/plugin.json")
+    )
+    for manifest in candidates:
+        try:
+            return str(json.loads(manifest.read_text(encoding="utf-8"))["version"])
+        except (OSError, KeyError, ValueError):
+            continue
+    return None
+
+
+def cmd_version() -> None:
+    """Report the plugin version this repo's `.claude/` came from, and whether it is behind.
+
+    `harness_init.py` has written `.claude/.harness-version` for some time; nothing ever read it, so
+    a vendored copy hundreds of lines behind the plugin looked exactly like a current one. The
+    stamp only stops drift being invisible once something compares it.
+
+    Never an error. The vendored copy is allowed to be a fork — this repo's was, carrying a local
+    addition the plugin lacks — and the point is that the fork is *stated* rather than discovered by
+    diffing after an update.
+    """
+    stamp_file = ROOT / ".claude" / ".harness-version"
+    stamped = None
+    if stamp_file.exists():
+        lines = [ln.strip() for ln in stamp_file.read_text(encoding="utf-8").splitlines()]
+        stamped = next((ln for ln in lines if ln and not ln.startswith("#")), None)
+
+    installed = installed_plugin_version()
+    print(f"vendored .claude/ : {stamped or 'unstamped (predates version stamping)'}")
+    print(f"installed plugin  : {installed or 'not found on this machine'}")
+
+    if stamped and installed and stamped != installed:
+        print(
+            f"\n!! This repo's .claude/ came from tdd-harness {stamped}; {installed} is installed.\n"
+            f"   The vendored gate and scripts are whatever {stamped} shipped, so a fix made since "
+            f"then is not running here.\n"
+            f"   Re-sync with /harness-init, or keep the fork deliberately — but knowing it is one."
+        )
+
+
+def require_known_project(project: str) -> None:
+    """Refuse an unknown project by name, and say which ones exist.
+
+    `green no-such-project` used to surface a `FileNotFoundError` carrying a `PosixPath` — an
+    internal type answering a typo. The harness knows the answer: the cycle files are the list.
+    """
+    if (CYCLE_DIR / f"{project}.json").exists():
+        return
+    known = known_projects()
+    sys.exit(
+        f"unknown project {project!r}; known: {', '.join(known) if known else '(none defined)'}\n"
+        f"  Projects are declared by their cycle file, {CYCLE_DIR.as_posix()}/<project>.json."
+    )
+
+
 def main() -> None:
     if len(sys.argv) < 2:
         sys.exit(__doc__)
@@ -1122,8 +1437,14 @@ def main() -> None:
     if cmd == "gate":
         cmd_gate()
     elif cmd == "red":
+        if len(args) < 2:
+            sys.exit("usage: harness.py red <project> <test-path> [runner args]")
+        require_known_project(args[0])
         cmd_red(args[0], args[1:])
     elif cmd == "green":
+        if not args:
+            sys.exit("usage: harness.py green <project>")
+        require_known_project(args[0])
         cmd_green(args[0])
     elif cmd == "quality":
         if not args:
@@ -1148,6 +1469,12 @@ def main() -> None:
             i = args.index("--evidence")
             evidence = " ".join(args[i + 1 :]).strip() or None
             args = args[:i]
+        if len(args) < 3:
+            sys.exit(
+                "usage: harness.py cycle <project> <cycle-id> "
+                "<queued|red|green|done|blocked> [agent] [--evidence TEXT]"
+            )
+        require_known_project(args[0])
         agent = args[3] if len(args) > 3 else None
         cmd_cycle(args[0], args[1], args[2], agent, evidence)
     elif cmd == "status":
@@ -1161,6 +1488,13 @@ def main() -> None:
         cmd_lessons("--all" in args)
     elif cmd == "adrs":
         cmd_adrs("--all" in args)
+    elif cmd == "version":
+        cmd_version()
+    elif cmd == "reconcile":
+        if not args:
+            sys.exit("usage: harness.py reconcile <project> [--write]")
+        require_known_project(args[0])
+        cmd_reconcile(args[0], "--write" in args)
     else:
         sys.exit(f"unknown subcommand: {cmd}")
 

@@ -46,6 +46,10 @@ TEMPLATES = PLUGIN_ROOT / "templates"
 
 VERSION_FILE = ".claude/.harness-version"
 
+# Ignore rules earlier versions wrote and this one does not. See `append_gitignore`: these are
+# reported to the user, never deleted for them.
+RETIRED_IGNORES = ["PROGRESS.md"]
+
 # The runners the shipped template defines. A project scaffolded against a name nothing defines
 # produces a cycle file that is fatal at the first `red`, one whole session later — but the set is
 # not fixed: a repo that has added `gotest` to its own .claude/harness.json can scaffold against
@@ -347,6 +351,21 @@ def append_gitignore(root: Path) -> str:
     if "--- TDD harness ---" not in existing:
         path.write_text(existing + block, encoding="utf-8", newline="\n")
         return "++ .gitignore (harness block appended)"
+
+    # Lines the harness used to write and no longer does. Reported, never removed: the top-up below
+    # adds what a repo is missing, and its failure mode is ignoring too much. Deleting an ignore
+    # rule has the opposite failure mode — committing a file someone deliberately hid — and an
+    # installer that can do that on its own is one that can eventually do it to a rule it did not
+    # write. Not worth automating to save a line of hand-editing.
+    retired = [line for line in RETIRED_IGNORES if line in {ln.strip() for ln in existing.splitlines()}]
+    if retired:
+        print(
+            f"!! .gitignore still hides {', '.join(retired)}, which the harness no longer ignores.\n"
+            f"   The board is what shows a reviewer the work; hidden, a fresh clone renders zeros "
+            f"against a finished repo.\n"
+            f"   Remove the line(s) by hand if you want it to ship — this installer will not edit "
+            f"an ignore rule out from under you."
+        )
 
     have = {line.strip() for line in existing.splitlines()}
     missing = [

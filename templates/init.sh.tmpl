@@ -347,6 +347,16 @@ fi
 # the dashboard renders, the vendored suite is green, and no cycle claims a completion it cannot
 # support. Past this line is the project's own toolchain, which is not the harness's to vouch for.
 GATE_VERIFIED=1
+
+# Which plugin version this .claude/ came from, and whether a newer one is installed. Printed even
+# under --gate-only, because that is the run that happens on every session start and this is the
+# one warning nothing else can surface: a vendored copy behind the plugin looks exactly like a
+# current one. Never fails the run — the vendored copy is allowed to be a fork, the point is that
+# the fork gets stated rather than discovered by diffing after an update (lesson 0005).
+if [ "$QUIET" != 1 ] || $PY "$H" version | grep -q '^!!'; then
+  $PY "$H" version || true
+fi
+
 if [ "$GATE_ONLY" = 1 ]; then
   say
   say "=== Harness verified ==="
