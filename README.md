@@ -1,5 +1,9 @@
 # tdd-harness
 
+[![version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftonsai987654321%2Fclaude-tdd-harness%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=blue)](.claude-plugin/plugin.json)
+[![license](https://img.shields.io/github/license/tonsai987654321/claude-tdd-harness?color=blue)](LICENSE)
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-8A63D2)](https://docs.anthropic.com/en/docs/claude-code)
+
 A Claude Code plugin that installs a **mechanical RED gate** into a repo: a `PreToolUse` hook that blocks every write to production code until a test has been run and watched to fail.
 
 The rule it enforces is one line — *no production code without a failing test on record* — and the point is that it is enforced by the filesystem rather than by instructions. An instruction in `CLAUDE.md` is a strong prior. A hook that exits 2 is a constraint.
