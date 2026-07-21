@@ -1,6 +1,7 @@
 # tdd-harness
 
 [![version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Ftonsai987654321%2Fclaude-tdd-harness%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=blue)](.claude-plugin/plugin.json)
+[![python](https://img.shields.io/badge/python-3.12-blue?logo=python&logoColor=white)](templates/init.sh.tmpl)
 [![license](https://img.shields.io/github/license/tonsai987654321/claude-tdd-harness?color=blue)](LICENSE)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-8A63D2)](https://docs.anthropic.com/en/docs/claude-code)
 
