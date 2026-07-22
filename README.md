@@ -22,7 +22,7 @@ The rule it enforces is one line — *no production code without a failing test 
 | `docs/FLOW.md` | how the whole thing works, as diagrams — installed into the repo, not just linked from here |
 | `docs/PLAYBOOK.md`, `docs/adr/`, `docs/lessons/` | how to run it, why it is shaped this way, what went wrong before |
 | agents | `tdd-implementer`, `cycle-reviewer`, `project-auditor`, `reconcile-auditor` |
-| commands | `/harness-init`, `/harness-build`, `/harness-status`, `/harness-continue` |
+| commands | `/harness-init`, `/harness-build`, `/harness-build-parallel`, `/harness-status`, `/harness-continue` |
 
 The installed repo is **self-contained**. Scripts are copied in, not referenced from the plugin, so the gate keeps working in a fresh clone on a machine that has never heard of this plugin — which is the situation any reviewer of the repo is in.
 

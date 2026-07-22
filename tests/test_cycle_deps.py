@@ -170,3 +170,93 @@ def test_all_remaining_blocked_is_reported_not_called_done(root: Path) -> None:
 
     assert "DONE" not in r.stdout, f"a deadlocked project reported as finished:\n{r.stdout}"
     assert "BLOCKED" in r.stdout.upper(), r.stdout
+
+
+# ------------------------------------------------- the parallel frontier (--batch), see ADR-0002
+
+
+def run_batch(root: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(NEXT_CYCLE), "--batch"],
+        capture_output=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(root)}, cwd=root,
+    )
+
+
+def write_project(root: Path, name: str, cycles: list[dict], order: int = 1) -> None:
+    d = root / ".claude" / "cycles"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.json").write_text(
+        json.dumps({"build_order": order, "runner": "pytest", "cycles": cycles}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def test_batch_lists_every_fresh_project(tmp_path: Path) -> None:
+    """Nothing couples projects, so a batch dispatch offers all of them at once — one line each."""
+    write_project(tmp_path, "alpha", [{"id": 0, "title": "schema"}], order=1)
+    write_project(tmp_path, "beta", [{"id": 0, "title": "setup"}], order=2)
+
+    r = run_batch(tmp_path)
+
+    assert "BUILD alpha 0" in r.stdout, f"a fresh project was left out of the batch:\n{r.stdout}"
+    assert "BUILD beta 0" in r.stdout, f"a fresh project was left out of the batch:\n{r.stdout}"
+
+
+def test_batch_is_the_frontier_one_cycle_per_project(tmp_path: Path) -> None:
+    """At most one cycle per project — a project's cycles are ordered, so only its lowest runnable
+    one may start. The batch is the frontier, not a project's whole remaining backlog."""
+    write_project(tmp_path, "alpha", [
+        {"id": 0, "title": "schema"},
+        {"id": 1, "title": "repo", "depends_on": [0]},
+        {"id": 2, "title": "api", "depends_on": [1]},
+    ], order=1)
+    write_project(tmp_path, "beta", [{"id": 0, "title": "setup"}], order=2)
+    assert run_harness(tmp_path, "cycle", "alpha", "0", "done", "--evidence", "pytest 4 passed").returncode == 0
+
+    r = run_batch(tmp_path)
+
+    assert "BUILD alpha 1" in r.stdout, f"alpha's frontier moved to cycle 1:\n{r.stdout}"
+    assert "BUILD beta 0" in r.stdout, r.stdout
+    assert "alpha 2" not in r.stdout, f"the backlog leaked into the batch:\n{r.stdout}"
+
+
+def test_batch_omits_a_finished_project(tmp_path: Path) -> None:
+    """A done project is not work; it must not appear in the frontier."""
+    write_project(tmp_path, "alpha", [{"id": 0, "title": "only"}], order=1)
+    write_project(tmp_path, "beta", [{"id": 0, "title": "setup"}], order=2)
+    assert run_harness(tmp_path, "cycle", "alpha", "0", "done", "--evidence", "pytest 4 passed").returncode == 0
+
+    r = run_batch(tmp_path)
+
+    assert "alpha" not in r.stdout, f"a finished project was still offered:\n{r.stdout}"
+    assert "BUILD beta 0" in r.stdout, r.stdout
+
+
+def test_batch_reports_a_blocked_project_without_dispatching_it(tmp_path: Path) -> None:
+    """The single-line dispatcher never hands out a blocked cycle; the batch keeps that guarantee
+    per project — a deadlocked one is reported, the others still dispatched."""
+    write_project(tmp_path, "alpha", [
+        {"id": 0, "title": "loop-a", "depends_on": [1]},
+        {"id": 1, "title": "loop-b", "depends_on": [0]},
+    ], order=1)
+    write_project(tmp_path, "beta", [{"id": 0, "title": "setup"}], order=2)
+    assert run_harness(tmp_path, "cycle", "alpha", "0", "red").returncode == 0
+
+    r = run_batch(tmp_path)
+
+    assert "BUILD alpha" not in r.stdout, f"a deadlocked project was dispatched:\n{r.stdout}"
+    assert "BLOCKED" in r.stdout.upper() and "alpha" in r.stdout, r.stdout
+    assert "BUILD beta 0" in r.stdout, f"one project's deadlock stalled the whole batch:\n{r.stdout}"
+
+
+def test_batch_is_done_when_every_project_is(tmp_path: Path) -> None:
+    """The orchestrator's loop terminates on DONE, the same word the single dispatcher uses."""
+    write_project(tmp_path, "alpha", [{"id": 0, "title": "only"}], order=1)
+    write_project(tmp_path, "beta", [{"id": 0, "title": "only"}], order=2)
+    for name in ("alpha", "beta"):
+        assert run_harness(tmp_path, "cycle", name, "0", "done", "--evidence", "pytest 4 passed").returncode == 0
+
+    r = run_batch(tmp_path)
+
+    assert r.stdout.strip() == "DONE", f"a fully-built repo did not report DONE:\n{r.stdout}"
