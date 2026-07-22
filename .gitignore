@@ -3,6 +3,10 @@ __pycache__/
 .pytest_cache/
 .venv/
 
+# macOS scatters these in every directory it browses. Untracked, they made `claude plugin tag`
+# refuse the 0.11.0 release the same way an untracked worktree did.
+.DS_Store
+
 # Worktrees live here. Untracked, they read as uncommitted work and make `claude plugin tag`
 # refuse to tag a release — which is exactly what happened to 0.9.0.
 .claude/worktrees/
