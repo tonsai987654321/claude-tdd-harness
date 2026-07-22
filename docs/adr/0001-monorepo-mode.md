@@ -1,6 +1,6 @@
 # ADR-0001: One repo can hold many projects — the ordering check scopes by path, not by `.git`
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-07-22
 
 ## Context
@@ -56,11 +56,14 @@ The existing dual mode is preserved. `--repo` still points the check at a checko
 synthetic `prefix` was invented precisely to unify those two shapes, and it continues to — the
 check detects whether a file already carries the project prefix and does not double it.
 
-`gate` already resolves the owning harness by walking up from the written file to the nearest
-`.claude/scripts/harness.py` rather than trusting `CLAUDE_PROJECT_DIR` (`harness_root_for`), which
-is what makes it worktree-correct today. It gains the symmetric step for monorepos: attribute a
-guarded write to a project by its `projects/<name>/` path prefix, and consult that project's gate
-state. State is already keyed per project; only the path-to-project mapping is new.
+`gate` needs no change: it was already path-scoped. The guarded patterns capture the project name
+from the path (`(?P<project>[^/]+)`), and `cmd_gate` reads that group to load *that* project's gate
+state — so a guarded write under `projects/A/` in a repo with one shared `.claude/` is already
+judged against A alone. It also resolves the owning harness by walking up to the nearest
+`.claude/scripts/harness.py` rather than trusting `CLAUDE_PROJECT_DIR`, which is what makes it
+worktree-correct. Both mechanisms were built per-project from the start; only `history` carried the
+single-project assumption. A regression test locks the multi-project gate behaviour so it stays
+that way.
 
 The `.git`-per-project requirement is dropped. In a monorepo the git root is the repository and a
 project is a subdirectory of it; in a single-project repo the two coincide, exactly as before.
@@ -112,15 +115,17 @@ New suite `test_history_monorepo.py`, each test building a real throwaway git re
 
 1. **Interleaved projects do not cross-credit.** One repo, commits alternating between project A and
    project B, each project internally RED-before-GREEN. `history A` and `history B` both pass.
-   Against today's code this fails: B's code spends A's banked RED.
+   Against today's code this fails: a monorepo project has no `.git` of its own, so `history`
+   exits "no git history" and cannot check it at all.
 2. **Interleaved projects catch a real violation.** Same repo, but B commits code with no B test
-   before it while A has a spare banked RED. `history B` must fail. Today it wrongly passes.
+   before it while A has a spare banked RED. `history B` must fail for the right reason — the
+   violation message, not the missing-repo error.
 3. **One commit spanning two projects is split by path.** A single commit touches
-   `projects/A/src/x.py` and `projects/B/test/y.py`. It banks a RED for B and spends a credit for A,
+   `projects/A/tests/...` and `projects/B/src/...`. It banks a RED for A and is a violation for B,
    not the reverse, and not both against one prefix.
 4. **A shared-file commit is in no project's ledger.** A commit touching only the root lockfile or
-   CI config is counted by neither `history A` nor `history B` — scaffolding is not in the ledger
-   (ADR-0003), and that must hold at the repo root too.
+   CI config is counted by no project — scaffolding is not in the ledger (ADR-0003), and that must
+   hold at the repo root too. `history A` reports two commits, not three.
 
 Regression, unchanged behaviour that must survive:
 
@@ -128,9 +133,10 @@ Regression, unchanged behaviour that must survive:
    (`test_history_exempt.py`, and the four real-project verdicts) pass without edit. If any real
    verdict moves, the change is wrong, not the project.
 
-Only once all five are RED for the right reason does `history` change. `gate` attribution is a
-second cycle with its own failing tests — a guarded write under `projects/A/` is judged against
-A's state, and a write under `projects/B/` against B's, in one repo with one `.claude/`.
+Only once all four are RED for the right reason does `history` change. `gate` needs no new
+behaviour — it was already path-scoped (see Decision) — so its cycle is a single regression test in
+`test_gate.py`: two projects in one root, one gate OPEN and one SHUT, the write to each judged
+against its own project's state.
 
-Shipped files change (`scripts/`, `templates/`), so the version bumps and `test_version_bump.py`
-enforces it (ADR is docs — this ADR alone ships nothing).
+Shipped files change (`scripts/harness.py`), so the version bumps and `test_version_bump.py`
+enforces it. The ADR itself is docs and ships nothing.

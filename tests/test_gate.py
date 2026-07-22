@@ -224,3 +224,38 @@ def test_writes_under_an_open_gate_are_recorded(tmp_path):
     state = _json.loads((root / ".claude" / "state" / "api.json").read_text(encoding="utf-8"))
     touched = state["gate"]["touched"]
     assert sorted(touched) == ["projects/api/app/a.py", "projects/api/app/b.py"], touched
+
+
+# --------------------------------------------------------- one root, many projects (monorepo)
+
+
+def test_two_projects_in_one_root_have_independent_gates(tmp_path):
+    """A monorepo shape: one `.claude/`, projects side by side. The gate was already path-scoped —
+    the guarded patterns capture the project name and cmd_gate loads *that* project's state — so A
+    being OPEN must not open B. This locks that behaviour (see ADR-0001), which is why a monorepo
+    needs no gate change, only the ordering check does.
+    """
+    import json as _json
+    import shutil as _shutil
+
+    src = Path(__file__).resolve().parents[1] / "scripts" / "harness.py"
+    (tmp_path / ".claude" / "scripts").mkdir(parents=True)
+    _shutil.copy2(src, tmp_path / ".claude" / "scripts" / "harness.py")
+    (tmp_path / ".claude" / "cycles").mkdir()
+    state = tmp_path / ".claude" / "state"
+    state.mkdir()
+    (tmp_path / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
+    # A's gate is OPEN; B has state on record but SHUT.
+    (state / "A.json").write_text(
+        _json.dumps({"project": "A", "gate": {"state": "OPEN"}, "cycles": []}), encoding="utf-8")
+    (state / "B.json").write_text(
+        _json.dumps({"project": "B", "gate": {"state": "SHUT"}, "cycles": []}), encoding="utf-8")
+    for p in ("A", "B"):
+        (tmp_path / "projects" / p / "src").mkdir(parents=True)
+
+    allowed = _probe(tmp_path, "projects/A/src/a.py")
+    blocked = _probe(tmp_path, "projects/B/src/b.py")
+
+    assert allowed.returncode == 0, f"A's gate is OPEN: {allowed.stdout}{allowed.stderr}"
+    assert blocked.returncode == 2, f"B's gate is SHUT but the write to B passed: {blocked.stdout}"
+    assert "'B'" in blocked.stderr, f"B's write was blocked, but named the wrong project:\n{blocked.stderr}"

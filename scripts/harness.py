@@ -350,6 +350,41 @@ def harness_root_for(path: Path) -> Path | None:
     return None
 
 
+def enclosing_git_root(start: Path) -> Path | None:
+    """The nearest ancestor (or `start` itself) that is a git repo. None if there is none.
+
+    A project inside a monorepo has no `.git` of its own; the log that records its ordering lives
+    in the repository above it. `history` walks up to find that repository. See ADR-0001.
+    """
+    for p in (start, *start.parents):
+        if (p / ".git").is_dir():
+            return p
+    return None
+
+
+def scoped_files(files: list[str], prefix: str, projects_dir: str, flat: bool):
+    """Yield the files in a commit that belong to one project, as harness-rooted paths.
+
+    Two commit shapes, distinguished by `flat`:
+
+    * `flat` — the log comes from a checkout that *is* the project (a `--repo` CI clone, or the
+      subrepo-per-project layout). Its paths are `src/...`; every one belongs to this project, so a
+      file under no project prefix is synthesised into this project's.
+    * not `flat` — the log comes from a monorepo. Paths are real (`projects/A/src/...`): a file
+      under this project's prefix is yielded as-is, a file under another project's prefix is
+      skipped, and a file under no project at all (a root lockfile, a CI config) belongs to no
+      ledger — the same treatment scaffolding has always had.
+    """
+    other = f"{projects_dir}/"
+    for f in files:
+        if f.startswith(prefix):
+            yield f
+        elif f.startswith(other):
+            continue
+        elif flat:
+            yield prefix + f
+
+
 def cmd_gate() -> None:
     global STATE_DIR, CYCLE_DIR, CONFIG_PATH
 
@@ -520,15 +555,27 @@ def cmd_history(project: str, repo: Path | None = None) -> None:
     # against a synthesised `projects/<name>/` prefix either way, so the same config decides what
     # counts as production code in both places.
     d = repo or project_dir(project)
-    if not (d / ".git").is_dir():
-        sys.exit(f"harness: no git history at {d} — nothing to check.")
-
     cfg = harness_config()
     patterns = guarded_patterns(cfg)
-    prefix = f"{cfg['projects_dir']}/{project}/"
+    projects_dir = cfg["projects_dir"]
+    prefix = f"{projects_dir}/{project}/"
+
+    # Where the log lives, and how the paths in it read. If `d` is itself a git repo — a `--repo`
+    # CI checkout or the subrepo-per-project layout — its files are flat and all belong to this one
+    # project. If `d` has no `.git`, it is a project inside a monorepo: the enclosing repo holds the
+    # log, its paths are real, and attribution is by prefix. A pathspec keeps the walk to this
+    # project's commits. See ADR-0001.
+    if (d / ".git").is_dir():
+        git_root, flat, pathspec = d, True, []
+    else:
+        found = enclosing_git_root(d)
+        if found is None:
+            sys.exit(f"harness: no git history at {d} — nothing to check.")
+        git_root, flat, pathspec = found, False, ["--", prefix]
 
     proc = subprocess.run(
-        ["git", "-C", str(d), "log", "--reverse", "--no-merges", "--format=%H%x1f%s", "--name-only"],
+        ["git", "-C", str(git_root), "log", "--reverse", "--no-merges",
+         "--format=%H%x1f%s", "--name-only", *pathspec],
         capture_output=True, **DECODE,
     )
     log = proc.stdout.strip()
@@ -553,8 +600,9 @@ def cmd_history(project: str, repo: Path | None = None) -> None:
         # look right; this one made something right look wrong, in the check built to be the
         # boundary the agent cannot cross. A red build on correct work teaches people to stop
         # trusting the check, which costs more than the check was ever worth.
-        code = any(any(p.search(prefix + f) for p in patterns) for f in files if not exempt(cfg, f))
-        tests = any(TEST_PATH.search(f) for f in files)
+        mine = list(scoped_files(files, prefix, projects_dir, flat))
+        code = any(any(p.search(full) for p in patterns) for full in mine if not exempt(cfg, full))
+        tests = any(TEST_PATH.search(full) for full in mine)
         if not (code or tests):
             return
         counted += 1
