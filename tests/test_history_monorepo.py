@@ -115,3 +115,69 @@ def test_a_shared_root_file_is_in_no_projects_ledger(monorepo: Path) -> None:
 
     assert a.returncode == 0, f"A's history is clean:\n{a.stdout}{a.stderr}"
     assert "2 commits" in a.stdout, f"the root-tooling commit leaked into A's ledger:\n{a.stdout}"
+
+
+# --- `history --all`: the CI arm. A single `history <reponame>` invocation checks one project and
+# vacuous-passes a monorepo with many; --all discovers every project and checks each. See issue #12.
+
+
+def history_all(root: Path) -> subprocess.CompletedProcess[str]:
+    """Run `history --all` against the monorepo root, the way CI does (`--repo .`)."""
+    return subprocess.run(
+        [sys.executable, str(HARNESS), "history", "--all", "--repo", str(root)],
+        capture_output=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(root)}, cwd=root,
+    )
+
+
+def test_all_catches_a_violation_a_single_project_check_would_miss(monorepo: Path) -> None:
+    """The regression. A is clean, B ships untested code. The old single-project CI invocation named
+    after the repo matched no file in a monorepo and exited 0; --all must fail on B."""
+    commit(monorepo, "test(A): z-score [RED]", {"projects/A/tests/test_a.py": "def test(): assert True\n"})
+    commit(monorepo, "feat(A): z-score [GREEN]", {"projects/A/src/a.py": "A = 1\n"})
+    commit(monorepo, "feat(B): untested", {"projects/B/src/b.py": "B = 1\n"})
+
+    r = history_all(monorepo)
+
+    assert r.returncode != 0, f"a monorepo with an untested project passed --all:\n{r.stdout}{r.stderr}"
+    assert "B" in r.stdout, f"the failing project was not named:\n{r.stdout}{r.stderr}"
+
+
+def test_all_is_green_when_every_project_is_clean(monorepo: Path) -> None:
+    """Both projects test-first — --all reports each and exits 0."""
+    commit(monorepo, "test(A): z-score [RED]", {"projects/A/tests/test_a.py": "def test(): assert True\n"})
+    commit(monorepo, "feat(A): z-score [GREEN]", {"projects/A/src/a.py": "A = 1\n"})
+    commit(monorepo, "test(B): parser [RED]", {"projects/B/tests/test_b.py": "def test(): assert True\n"})
+    commit(monorepo, "feat(B): parser [GREEN]", {"projects/B/src/b.py": "B = 1\n"})
+
+    r = history_all(monorepo)
+
+    assert r.returncode == 0, f"a clean monorepo was rejected:\n{r.stdout}{r.stderr}"
+    assert "A" in r.stdout and "B" in r.stdout, f"--all did not check every project:\n{r.stdout}"
+
+
+def test_all_on_a_flat_single_project_repo_still_checks_the_one(tmp_path: Path) -> None:
+    """A flat checkout — src/ at the root, no projects/ dir — has one project named after the repo.
+    --all must fall back to checking it, so single-project CI is unchanged by the loop."""
+    repo = tmp_path / "flat"
+    repo.mkdir()
+    git(repo, "init", "-q")
+    commit(repo, "feat: untested", {"src/a.py": "A = 1\n"})
+
+    r = history_all(repo)
+
+    assert r.returncode != 0, f"a flat repo shipping untested code passed --all:\n{r.stdout}{r.stderr}"
+
+
+def test_workflow_template_uses_the_all_loop() -> None:
+    """Guard the YAML regression: the shipped CI workflow must run the per-project loop, not a single
+    `history <reponame>` that vacuous-passes a monorepo (issue #12).
+
+    Skipped where the source template is absent: this suite is vendored into scaffolded repos, which
+    do not carry the plugin's `templates/` tree. The guard is meaningful only in the source repo."""
+    wf_path = REPO_ROOT / "templates" / "workflows" / "tdd-ordering.yml"
+    if not wf_path.is_file():
+        pytest.skip("no source workflow template here (vendored suite)")
+    wf = wf_path.read_text(encoding="utf-8")
+    assert "history --all" in wf, "the CI workflow does not use the per-project --all loop"
+    assert 'history "${GITHUB_REPOSITORY##*/}"' not in wf, "the CI workflow still checks one project by repo name"

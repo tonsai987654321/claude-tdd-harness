@@ -532,30 +532,30 @@ def exempt(cfg: dict, rel: str) -> bool:
     return any(re.search(p, rel) for p in cfg["exempt_patterns"])
 
 
-def cmd_history(project: str, repo: Path | None = None) -> None:
-    """Check the git history for the ordering the gate exists to produce: test first, then code.
+def discover_projects(base: Path, cfg: dict) -> list[str]:
+    """Every project in a checkout, for `history --all` in CI.
 
-    Everything else in this harness runs on the machine the agent runs on and reads state the
-    agent can reach, which makes it evidence about a cooperative agent rather than a boundary.
-    This is the one check meant to run somewhere else — in CI, where the agent writes the code but
-    not the verdict — and it reads only `git log`, which the harness never writes.
-
-    The rule is the harness's own model, counted rather than asserted. Walking oldest to newest, a
-    commit touching tests banks a RED and a commit touching guarded code spends one; code that
-    arrives with nothing banked is the violation. Commits touching neither — scaffolding, docs, CI
-    — are not in the ledger at all.
-
-    A commit carrying tests and code together banks and immediately spends, which is deliberate.
-    It is the one shape this cannot judge, because the ordering it exists to prove happened inside
-    a single commit where git cannot see it. PLAYBOOK asks for two commits per cycle for exactly
-    that reason, and a repo that squashes gets a weaker check rather than a false accusation.
+    A monorepo names its projects by the directories under `projects_dir` — the same layout the
+    gate and the ledger already scope by. A flat single-project repo has no such directory; its one
+    project is named after the checkout, exactly as the old single-project CI invocation named it
+    after `${GITHUB_REPOSITORY##*/}`. Returning the checkout name there keeps that path unchanged.
     """
-    # `--repo` points at a checkout directly, which is how this runs in CI: the project repo is
-    # its own root there, not a directory under the harness. The guarded patterns are matched
-    # against a synthesised `projects/<name>/` prefix either way, so the same config decides what
-    # counts as production code in both places.
-    d = repo or project_dir(project)
-    cfg = harness_config()
+    pdir = base / cfg["projects_dir"]
+    if pdir.is_dir():
+        subs = sorted(d.name for d in pdir.iterdir() if d.is_dir() and not d.name.startswith("."))
+        if subs:
+            return subs
+    return [base.resolve().name]
+
+
+def ledger(project: str, d: Path, cfg: dict) -> tuple[bool, int, list[str]] | None:
+    """Walk one project's git history as the RED-before-GREEN ledger. See `cmd_history`.
+
+    Returns `(had_commits, counted, violations)`, or `None` when there is no git repository to read
+    at all. `had_commits` is False only for a truly empty log — kept apart from a non-empty log that
+    touches nothing this project ledgers, so a single check can still say "no commits" out loud.
+    Prints nothing — the caller decides how a single check and an `--all` sweep each report.
+    """
     patterns = guarded_patterns(cfg)
     projects_dir = cfg["projects_dir"]
     prefix = f"{projects_dir}/{project}/"
@@ -570,7 +570,7 @@ def cmd_history(project: str, repo: Path | None = None) -> None:
     else:
         found = enclosing_git_root(d)
         if found is None:
-            sys.exit(f"harness: no git history at {d} — nothing to check.")
+            return None
         git_root, flat, pathspec = found, False, ["--", prefix]
 
     proc = subprocess.run(
@@ -580,7 +580,7 @@ def cmd_history(project: str, repo: Path | None = None) -> None:
     )
     log = proc.stdout.strip()
     if not log:
-        sys.exit(f"harness: {project} has no commits.")
+        return (False, 0, [])
 
     banked, violations, counted = 0, [], 0
     sha = subject = ""
@@ -623,6 +623,11 @@ def cmd_history(project: str, repo: Path | None = None) -> None:
             files.append(line.strip())
     settle()
 
+    return (True, counted, violations)
+
+
+def _report(project: str, counted: int, violations: list[str]) -> bool:
+    """Print one project's verdict the way the single-project check always has. True if clean."""
     if violations:
         print(f"harness: {project} — production code committed with no test commit before it:\n")
         for v in violations:
@@ -631,8 +636,65 @@ def cmd_history(project: str, repo: Path | None = None) -> None:
             f"\n  {len(violations)} of {counted} relevant commits. The gate proves this ordering "
             "locally;\n  this proves it survived into the history, where it can be reviewed."
         )
-        sys.exit(1)
+        return False
     print(f"harness: {project} — {counted} commits, every code commit preceded by a test commit.")
+    return True
+
+
+def cmd_history(project: str | None, repo: Path | None = None, all_projects: bool = False) -> None:
+    """Check the git history for the ordering the gate exists to produce: test first, then code.
+
+    Everything else in this harness runs on the machine the agent runs on and reads state the
+    agent can reach, which makes it evidence about a cooperative agent rather than a boundary.
+    This is the one check meant to run somewhere else — in CI, where the agent writes the code but
+    not the verdict — and it reads only `git log`, which the harness never writes.
+
+    The rule is the harness's own model, counted rather than asserted. Walking oldest to newest, a
+    commit touching tests banks a RED and a commit touching guarded code spends one; code that
+    arrives with nothing banked is the violation. Commits touching neither — scaffolding, docs, CI
+    — are not in the ledger at all.
+
+    A commit carrying tests and code together banks and immediately spends, which is deliberate.
+    It is the one shape this cannot judge, because the ordering it exists to prove happened inside
+    a single commit where git cannot see it. PLAYBOOK asks for two commits per cycle for exactly
+    that reason, and a repo that squashes gets a weaker check rather than a false accusation.
+
+    `--all` is the CI arm. A monorepo holds many projects in one repo (ADR-0001); a single check
+    named after the repo matches none of their files and exits 0 — a boundary that passes by
+    checking nothing. `--all` discovers every project in the checkout and fails if any one fails.
+    """
+    # `--repo` points at a checkout directly, which is how this runs in CI: the project repo is
+    # its own root there, not a directory under the harness. The guarded patterns are matched
+    # against a synthesised `projects/<name>/` prefix either way, so the same config decides what
+    # counts as production code in both places.
+    cfg = harness_config()
+
+    if all_projects:
+        base = repo or ROOT
+        projects = discover_projects(base, cfg)
+        if not projects:
+            sys.exit(f"harness: history --all found no projects under {base}.")
+        clean = True
+        for p in projects:
+            d = repo or project_dir(p)
+            res = ledger(p, d, cfg)
+            if res is None:
+                sys.exit(f"harness: no git history at {d} — nothing to check.")
+            _had, counted, violations = res
+            # A project with no commits yet (a freshly added directory) has shipped nothing untested,
+            # so it does not fail the sweep — `_report` prints it as a clean 0-commit ledger.
+            clean = _report(p, counted, violations) and clean
+        # One boundary, one verdict: any project that fails fails the sweep.
+        sys.exit(0 if clean else 1)
+
+    d = repo or project_dir(project)
+    res = ledger(project, d, cfg)
+    if res is None:
+        sys.exit(f"harness: no git history at {d} — nothing to check.")
+    had_commits, counted, violations = res
+    if not had_commits:
+        sys.exit(f"harness: {project} has no commits.")
+    sys.exit(0 if _report(project, counted, violations) else 1)
 
 
 def cmd_quality(project: str) -> None:
@@ -1607,9 +1669,14 @@ def main() -> None:
             i = args.index("--repo")
             repo = Path(args[i + 1]).resolve()
             args = args[:i] + args[i + 2:]
-        if not args:
-            sys.exit("usage: harness.py history <project> [--repo PATH]")
-        cmd_history(args[0], repo)
+        all_projects = "--all" in args
+        args = [a for a in args if a != "--all"]
+        if all_projects:
+            cmd_history(None, repo, all_projects=True)
+        elif args:
+            cmd_history(args[0], repo)
+        else:
+            sys.exit("usage: harness.py history <project> [--repo PATH]  |  history --all [--repo PATH]")
     elif cmd == "cycle":
         evidence = None
         if "--evidence" in args:
