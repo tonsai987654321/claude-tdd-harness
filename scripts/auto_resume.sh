@@ -45,10 +45,18 @@ echo $$ >"$LOCK"
 trap 'rm -f "$LOCK"' EXIT
 echo "$(date '+%F %T') resuming: $NEXT" >>"$LOG"
 
-# Headless resume. --continue reuses the latest session in this dir if present.
-# If the usage window is still closed, this exits quickly; the lock is released
-# and the next launchd tick retries.
-"$CLAUDE_BIN" -p "/harness-continue" >>"$LOG" 2>&1 \
+# Headless resume. A fresh session each tick — state comes from the .claude/ files, not chat
+# history, so there is nothing to --continue. The permission grant is not optional: in `-p` mode
+# the default permission mode is read-only, so without it every Bash, Edit and Agent (subagent)
+# call the build makes is denied and the run advances nothing. `acceptEdits` rather than
+# `--dangerously-skip-permissions` on purpose — the RED-gate PreToolUse hook must keep firing, and
+# bypass mode is exactly where a gate stops being one. Override the grant with HARNESS_RESUME_ARGS.
+#
+# If the usage window is still closed, this exits quickly; the lock is released and the next
+# launchd tick retries.
+RESUME_ARGS="${HARNESS_RESUME_ARGS:---permission-mode acceptEdits --allowedTools Bash,Edit,Write,Read,Glob,Grep,Agent,TodoWrite}"
+# shellcheck disable=SC2086
+"$CLAUDE_BIN" -p "/harness-continue" $RESUME_ARGS >>"$LOG" 2>&1 \
   || echo "$(date '+%F %T') claude exited non-zero (likely quota still out) — will retry next tick" >>"$LOG"
 
 echo "$(date '+%F %T') resume attempt finished" >>"$LOG"

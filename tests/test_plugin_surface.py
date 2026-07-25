@@ -70,6 +70,44 @@ def test_every_slash_command_the_plugin_emits_is_defined() -> None:
     )
 
 
+# A path like `.claude/scripts/reset_eta.py` — a script the harness tells someone to run. Same
+# defect as an undefined slash command: a file that names a script nobody shipped is a broken
+# instruction, read by a human (or a headless resume) under pressure. `test_every_slash_command...`
+# closed that hole for `/name`; this closes it for the script paths beside them.
+SCRIPT_REF = re.compile(r"\.claude/scripts/([A-Za-z0-9_-]+\.(?:py|sh))")
+
+
+def test_every_script_the_plugin_points_at_exists() -> None:
+    scripts_dir = PLUGIN_ROOT / "scripts"
+    missing: dict[str, list[str]] = {}
+    for path in SEARCHED:
+        if not path.is_file():
+            continue
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for match in SCRIPT_REF.finditer(line):
+                name = match.group(1)
+                if not (scripts_dir / name).is_file():
+                    missing.setdefault(name, []).append(f"{path.relative_to(PLUGIN_ROOT)}:{line_no}")
+    assert not missing, "scripts referenced but not shipped in scripts/: " + "; ".join(
+        f"{name} at {', '.join(where)}" for name, where in sorted(missing.items())
+    )
+
+
+def test_the_external_resume_grants_tools_to_its_headless_run() -> None:
+    """`auto_resume.sh` launches `claude -p "/harness-continue"`. In headless mode the default
+    permission mode is read-only — Bash, Edit and the Agent (subagent) tool are denied — so a
+    dispatch with no permission grant relaunches Claude that cannot run a single step of the build.
+    The whole external resume silently no-ops. Guard that the grant is present."""
+    src = (PLUGIN_ROOT / "scripts" / "auto_resume.sh").read_text(encoding="utf-8")
+    assert "-p " in src and "/harness-continue" in src, "resume no longer dispatches the continue command"
+    assert "--allowedTools" in src or "--allowed-tools" in src, (
+        "headless resume dispatches with no --allowedTools — its Bash/Edit/Agent calls are denied"
+    )
+    assert "--permission-mode" in src or "--dangerously-skip-permissions" in src, (
+        "headless resume dispatches with no permission mode — nothing it does is auto-approved"
+    )
+
+
 def test_every_command_file_declares_a_description() -> None:
     """The description is what the user sees in the command picker. A command with none is a
     command nobody finds."""

@@ -66,6 +66,24 @@ def test_reinstall_resyncs_framework_and_keeps_user_content(repo: Path) -> None:
     assert cycles.read_text(encoding="utf-8") == '{"mine": true}\n'
 
 
+def test_operational_commands_are_vendored(repo: Path) -> None:
+    """The build's own commands must live in the scaffolded repo, not only in the plugin.
+
+    `auto_resume.sh` runs `claude -p "/harness-continue"` from the repo dir. A project-scoped
+    `.claude/commands/*.md` is loaded from the working directory whether or not the plugin is
+    installed — which is the harness's stated principle (it must work in a clone with the plugin
+    absent). Without vendoring, the headless resume expands `/harness-continue` to nothing.
+
+    `harness-init` is deliberately NOT vendored: re-scaffolding resolves templates relative to the
+    plugin root and is the plugin's job, exactly like `harness_init.py` itself (docs/lessons/0003).
+    """
+    cmd_dir = repo / ".claude" / "commands"
+    assert (cmd_dir / "harness-continue.md").is_file(), "the resume command is not vendored"
+    for name in ("harness-build.md", "harness-build-parallel.md", "harness-status.md"):
+        assert (cmd_dir / name).is_file(), f"{name} is not vendored into the scaffolded repo"
+    assert not (cmd_dir / "harness-init.md").exists(), "harness-init must not be vendored — re-scaffold is the plugin's job"
+
+
 def test_reset_overwrites_only_the_named_file(repo: Path) -> None:
     (repo / "CLAUDE.md").write_text("mine\n", encoding="utf-8")
     (repo / "CONTEXT.md").write_text("also mine\n", encoding="utf-8")
