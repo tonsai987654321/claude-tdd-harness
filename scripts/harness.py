@@ -788,10 +788,106 @@ def cmd_red(project: str, test_args: list[str]) -> None:
         sys.exit(f"NOT RED: {runner} exited {code} (infrastructure failure, not a test failure).")
 
     state = load_state(project)
-    state["gate"] = {"state": "OPEN", "test": test_args, "opened_at": time.time(), "exit_code": code}
+    # The commit HEAD points at now is the pre-code baseline: the test is committed (this is the
+    # [RED] commit) but the production code that satisfies it is not written yet. `green` reverts the
+    # touched files to this commit to check the test still needs them. Captured here, not read as
+    # HEAD at green time, so the check survives a cycle that commits its code before running green.
+    state["gate"] = {
+        "state": "OPEN",
+        "test": test_args,
+        "opened_at": time.time(),
+        "exit_code": code,
+        "base_sha": _head_sha(project),
+    }
     save_state(project, state)
     hint = spec.get("writable_hint", "production code")
     print(f"\nRED confirmed (exit {code}). Gate OPEN for '{project}' — {hint} is writable until green.")
+
+
+def _head_sha(project: str) -> str | None:
+    """The commit HEAD points at in the project's repository, or None if there is no git yet."""
+    git_root = enclosing_git_root(project_dir(project))
+    if git_root is None:
+        return None
+    proc = subprocess.run(["git", "-C", str(git_root), "rev-parse", "HEAD"], capture_output=True, **DECODE)
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def _blob_at(git_root: Path, sha: str, abs_path: Path) -> bytes | None:
+    """The file's bytes at `sha`, or None if it did not exist there (a file new this cycle)."""
+    try:
+        rel = abs_path.relative_to(git_root).as_posix()
+    except ValueError:
+        return None  # outside the repo — treat as absent, i.e. revert removes it
+    proc = subprocess.run(
+        ["git", "-C", str(git_root), "show", f"{sha}:{rel}"], capture_output=True)
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _enforce_test_needs_code(project: str, spec: dict) -> None:
+    """Refuse a `green` whose test still passes once this cycle's code is reverted.
+
+    The RED gate proves the test failed before the code was written. Between `red` and `green` the
+    test file — never gated — can be rewritten to pass trivially, and then production code written
+    under the open gate certifies a cycle nothing constrains (ADR-0003 names this hole; ADR-0010
+    closes the reachable part of it). So revert the guarded files this cycle touched to their
+    pre-cycle content, rerun the test that opened the gate, and require a real failure. A test that
+    passes with the code gone proves nothing — the same refusal `red` makes at the other end.
+
+    Whole-change revert, not statement-level mutation: it cannot tell a vacuous assert from a real
+    one when removing the file breaks the import, but it does catch a test that no longer depends on
+    this cycle's code at all. That limit is deliberate and documented (ADR-0010).
+    """
+    if os.environ.get("HARNESS_QUALITY_BYPASS") == "1":
+        print("harness: quality gate bypassed (HARNESS_QUALITY_BYPASS=1)", file=sys.stderr)
+        return
+
+    gate = load_state(project).get("gate", {})
+    test = gate.get("test")
+    touched = gate.get("touched") or []
+    base_sha = gate.get("base_sha")
+    git_root = enclosing_git_root(project_dir(project))
+
+    # Fail open when the check cannot be run at all: no test on record, nothing touched (record_touch
+    # is best-effort bookkeeping that may lose an entry — see its docstring — and must never cost a
+    # legitimate green), no baseline, or no git to revert against. The check adds proof where it can;
+    # it does not invent a refusal from missing data.
+    if not test or not touched or not base_sha or git_root is None:
+        return
+
+    saved: dict[Path, bytes | None] = {}
+    try:
+        for rel in touched:
+            abs_path = ROOT / rel
+            saved[abs_path] = abs_path.read_bytes() if abs_path.is_file() else None
+            base = _blob_at(git_root, base_sha, abs_path)
+            if base is None:
+                if abs_path.is_file():
+                    abs_path.unlink()  # new this cycle — reverting means removing it
+            else:
+                abs_path.write_bytes(base)
+        code, _ = run_suite(project, spec, [*test, *spec.get("red_args", [])])
+        real_failure = code in set(spec["red_exit_codes"])
+    finally:
+        # Restore unconditionally: a quality check that leaves the tree half-reverted is worse than
+        # no check. Recreate what was removed, remove what was created, rewrite the rest.
+        for abs_path, data in saved.items():
+            if data is None:
+                if abs_path.is_file():
+                    abs_path.unlink()
+            else:
+                abs_path.parent.mkdir(parents=True, exist_ok=True)
+                abs_path.write_bytes(data)
+
+    if not real_failure:
+        sys.exit(
+            f"\nQUALITY GATE: with this cycle's code reverted, {' '.join(test)} still did not fail "
+            f"(exit {code}). Gate stays OPEN for '{project}'.\n"
+            f"  A test that passes without the code it is meant to drive proves nothing — the same\n"
+            f"  reason a test that passes before the code exists is refused at RED.\n"
+            f"  Make the test actually depend on the behaviour, or set HARNESS_QUALITY_BYPASS=1 if it\n"
+            f"  genuinely cannot be driven to fail by reverting one file."
+        )
 
 
 def cmd_green(project: str) -> None:
@@ -799,6 +895,10 @@ def cmd_green(project: str) -> None:
     code, out = run_suite(project, spec, list(spec.get("green_args", [])))
     if code != 0:
         sys.exit(f"\nStill RED (exit {code}). Gate stays OPEN. Keep going.")
+
+    # The suite passing is necessary, not sufficient: it can pass because the test no longer needs
+    # the code. Prove it still does before shutting the gate (ADR-0010). Exits non-zero on refusal.
+    _enforce_test_needs_code(project, spec)
 
     coverage = scrape_coverage(spec, out)
     state = load_state(project)
