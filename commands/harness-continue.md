@@ -54,19 +54,24 @@ You are running the build **continuously**. Do not stop between cycles for appro
 The failure message names a reset time, e.g. "resets 3am (Asia/Bangkok)". Do not retry immediately — the limit resets at a fixed clock time, so an immediate retry just burns another partial cycle. Instead:
 
 1. Recover the interrupted cycle (step 2 above) so the tree is clean and restartable.
-2. Compute the wait:
+2. Compute the wait — seconds until 5 minutes past the reset:
 
    ```bash
-   python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/reset_eta.py" <reset-time>   # e.g. 3am
+   python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/usage_guard.py" --eta
    ```
 
-   This returns seconds until 5 minutes past the reset.
+   This reads the reset time from the statusline snapshot. If there is no snapshot (a headless run has none), fall back to the reset time the failure message named, e.g. "resets 3am" → wait until 3:05am local.
 3. Schedule the resume with `ScheduleWakeup`:
    - `delaySeconds`: the value above, but the runtime clamps to [60, 3600]. If the true wait exceeds 3600s, schedule 3600 and re-check on wake (hop until the reset has actually passed — verify by dispatching once; if it dies again, the limit is not back yet, so schedule the next reset window).
    - `prompt`: the literal sentinel `<<autonomous-loop-dynamic>>` (this re-enters continuous mode on wake).
    - `reason`: e.g. "usage limit hit; resuming 5 min after 3am Bangkok reset".
 
 On wake, start again at step 1.
+
+> **`ScheduleWakeup` is in-session only.** It dies when the process exits, so in a headless
+> `claude -p` resume (the launchd path, `auto_resume.sh`) the wake never fires — the launchd tick
+> *is* the durable layer there, and it will relaunch this command on its own schedule. Scheduling a
+> wake in that context is harmless but does nothing; the durable resume is the cron/launchd job.
 
 ## Guardrails
 

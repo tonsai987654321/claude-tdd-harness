@@ -111,6 +111,19 @@ SCRIPTS = [
     "autocont.sh",
 ]
 
+# Copied into the target's .claude/commands/, so the build's own slash commands resolve in the
+# scaffolded repo whether or not the plugin is installed — the same principle SCRIPTS follows, and
+# the reason auto_resume.sh's `claude -p "/harness-continue"` can run at all: a project-scoped
+# .claude/commands/*.md loads from the working directory. `harness-init` is excluded on purpose —
+# re-scaffolding resolves templates relative to the plugin root (see the SCRIPTS note), so a
+# vendored copy would point at a .claude/templates/ that a scaffolded repo does not have.
+COMMANDS = [
+    "harness-build.md",
+    "harness-build-parallel.md",
+    "harness-continue.md",
+    "harness-status.md",
+]
+
 
 def plugin_version() -> str:
     manifest = PLUGIN_ROOT / ".claude-plugin" / "plugin.json"
@@ -536,6 +549,12 @@ def main(argv: list[str] | None = None) -> int:
         src = PLUGIN_ROOT / "scripts" / name
         if src.exists():
             writer.copy(src, f".claude/scripts/{name}", framework=True)
+    # The build's slash commands, so a headless resume (and an interactive one) can invoke them
+    # from the repo dir with the plugin absent. See the COMMANDS note.
+    for name in COMMANDS:
+        src = PLUGIN_ROOT / "commands" / name
+        if src.exists():
+            writer.copy(src, f".claude/commands/{name}", framework=True)
     # The suite that drives harness.py itself. It goes under .claude/, not the repo's tests/,
     # because a target repo's tests/ is its own — init.sh running that as "the harness suite"
     # would report someone else's failing tests as a broken gate.
