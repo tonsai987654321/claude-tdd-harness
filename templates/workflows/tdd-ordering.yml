@@ -41,4 +41,9 @@ jobs:
         # `guarded` and `projects_dir` come from .claude/harness.json when this repo carries one,
         # and from the shipped defaults otherwise — the same config that decides what the local
         # gate refuses decides what CI counts as production code.
-        run: python3 harness.py history "${GITHUB_REPOSITORY##*/}" --repo .
+        #
+        # `--all` discovers every project in the checkout and checks each. A monorepo (ADR-0001)
+        # holds many projects in one repo; the old single invocation named after the repo matched
+        # none of their files and exited 0 — a boundary that passed by checking nothing. A flat
+        # single-project repo has one project named after the checkout, so `--all` covers it too.
+        run: python3 harness.py history --all --repo .
