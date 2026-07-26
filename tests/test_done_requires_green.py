@@ -117,3 +117,53 @@ def test_done_is_allowed_once_green_has_shut_the_gate(tmp_path: Path) -> None:
     r = run_harness(tmp_path, "cycle", "demo-api", "0", "done", "--evidence", f"pytest 1 passed; {sha} [RED]")
 
     assert r.returncode == 0, f"a green, committed, evidenced cycle was refused:\n{r.stdout}{r.stderr}"
+
+
+def test_done_is_refused_when_cycle_declares_no_test_and_gate_is_open(tmp_path: Path) -> None:
+    """The regression #29 reopened: a cycle with NO declared `first_test`, gate OPEN, green never run.
+
+    The other done-path checks (committed-test, coverage) go quiet when green was skipped — they read
+    `last_red_test`/`coverage`, which only green writes — so this guard is the only proof the suite
+    was ever green. It must fail closed: an open gate on a cycle that cannot be matched to a *later*
+    cycle refuses the `done`, exactly as it did before v0.17.0 failed it open."""
+    sha = _write(tmp_path, "OPEN")
+    # Cycle 0 declares no test at all; the open gate cannot be attributed to any other declared cycle.
+    (tmp_path / ".claude" / "cycles" / "demo-api.json").write_text(
+        json.dumps({"build_order": 1, "runner": "pytest",
+                    "cycles": [{"id": 0, "title": "auth"}]}),
+        encoding="utf-8")
+    # Green was skipped, so nothing wrote last_red_test either — the vacuous-pass hole this guards.
+    state_p = tmp_path / ".claude" / "state" / "demo-api.json"
+    st = json.loads(state_p.read_text(encoding="utf-8"))
+    st["last_red_test"] = []
+    state_p.write_text(json.dumps(st), encoding="utf-8")
+
+    r = run_harness(tmp_path, "cycle", "demo-api", "0", "done", "--evidence", f"pytest 1 passed; {sha} [RED]")
+
+    assert r.returncode != 0, "a cycle with no declared test closed with its gate wide OPEN — green never confirmed"
+    assert "green" in r.stderr.lower(), f"the refusal must point at the missing green:\n{r.stderr}"
+
+
+def test_done_is_not_refused_on_a_short_name_false_match(tmp_path: Path) -> None:
+    """Segment matching, not raw suffix: `tests/a.py` must not match a gate opened on `tests/data.py`.
+
+    A later cycle holds the gate open on `tests/data.py`; this cycle's `first_test` is `tests/a.py`.
+    Raw `endswith` would read "data.py".endswith("a.py") as this cycle owning the gate and refuse it
+    wrongly. With `/`-boundary matching the open gate is attributed to the *other* cycle, so this
+    already-green cycle closes."""
+    sha = _write(tmp_path, "OPEN")
+    (tmp_path / ".claude" / "cycles" / "demo-api.json").write_text(
+        json.dumps({"build_order": 1, "runner": "pytest", "cycles": [
+            {"id": 0, "title": "auth", "first_test": "tests/a.py"},
+            {"id": 1, "title": "billing", "first_test": "tests/data.py"},
+        ]}),
+        encoding="utf-8")
+    state_p = tmp_path / ".claude" / "state" / "demo-api.json"
+    st = json.loads(state_p.read_text(encoding="utf-8"))
+    st["gate"]["test"] = ["tests/data.py"]  # the LATER cycle's test holds the gate open
+    st["cycles"] = [{"id": 0, "title": "auth", "state": "green"}, {"id": 1, "title": "billing", "state": "red"}]
+    state_p.write_text(json.dumps(st), encoding="utf-8")
+
+    r = run_harness(tmp_path, "cycle", "demo-api", "0", "done", "--evidence", f"pytest 1 passed; {sha} [RED]")
+
+    assert r.returncode == 0, f"cycle 0's `tests/a.py` false-matched `tests/data.py` and was wrongly refused:\n{r.stdout}{r.stderr}"

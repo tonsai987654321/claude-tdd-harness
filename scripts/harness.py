@@ -960,26 +960,51 @@ def _refuse_unresolvable_shas(project: str, cycle_id: str, evidence: str) -> Non
 
 
 def _gate_open_for_cycle(project: str, cycle_id: str) -> bool:
-    """Is the project's gate OPEN *and* was it opened on this cycle's test?
+    """Refuse a `done` while the gate is OPEN unless the gate provably belongs to a *different* cycle.
 
-    The gate records the test that opened it (`gate.test`); a cycle declares its own test
-    (`first_test`). The open gate belongs to this cycle only when those name the same test — that is
-    what keeps closing an earlier, already-green cycle from being refused because a later cycle has
-    the gate open. A cycle that declares no test cannot own the gate, so it is never blocked here
-    (its missing-RED case is caught by the committed-test checks below, not this one).
+    The gate being OPEN is mechanical proof green never confirmed (only a passing green shuts it).
+    The done-path's other checks — committed-test, coverage — cannot stand in for that: they key off
+    `last_red_test`/`coverage`, which only `green` writes, so when green was skipped they are empty
+    and pass vacuously. This guard is the *only* thing left that catches a skipped green, so it must
+    fail closed: an unattributable open gate refuses the close.
+
+    The one legitimate exception is the per-project gate held open by a *later* cycle: the gate
+    records the test it was opened on (`gate.test`) and each cycle declares its own (`first_test`),
+    so when the open gate names another declared cycle's test — and not this one's — this cycle's
+    green really did shut its own gate earlier, and it must still close (ADR out-of-order close).
+
+    So: not OPEN → don't refuse. Opened on THIS cycle's test → refuse (its own green was skipped).
+    Opened on ANOTHER declared cycle's test → don't refuse (a later cycle's in-flight gate).
+    Otherwise — no `first_test`, or an open gate that matches no declared cycle → refuse, fail closed.
     """
     gate = load_state(project).get("gate", {})
     if gate.get("state") != "OPEN":
         return False
-    declared = next(
-        (c for c in (project_config(project).get("cycles") or []) if str(c.get("id")) == str(cycle_id)),
-        {},
-    )
-    first_test = declared.get("first_test")
-    if not first_test:
-        return False
+
+    # Two test paths name the same test when equal or one is the other suffixed at a `/` boundary.
+    # A raw `endswith` false-matches short names ("tests/data.py".endswith("a.py")); the boundary
+    # keeps `a.py` from matching `data.py` while still spanning repo-root vs project-relative paths.
+    def _same_test(a: str, b: str) -> bool:
+        return a == b or a.endswith("/" + b) or b.endswith("/" + a)
+
     opened_on = [str(a) for a in (gate.get("test") or []) if not str(a).startswith("-")]
-    return any(first_test == t or t.endswith(first_test) or first_test.endswith(t) for t in opened_on)
+
+    cycles = project_config(project).get("cycles") or []
+    declared = next((c for c in cycles if str(c.get("id")) == str(cycle_id)), {})
+    first_test = declared.get("first_test")
+    if first_test and any(_same_test(str(first_test), t) for t in opened_on):
+        return True  # this cycle's own green was skipped — the open gate is its RED
+
+    # The gate belongs to a *different* declared cycle: a later, in-flight cycle holds it open while
+    # this already-green cycle closes. Only then is an OPEN gate not this cycle's problem.
+    for c in cycles:
+        if str(c.get("id")) == str(cycle_id):
+            continue
+        other = c.get("first_test")
+        if other and any(_same_test(str(other), t) for t in opened_on):
+            return False
+
+    return True  # fail closed: no `first_test`, or an open gate we cannot attribute to anyone else
 
 
 def declared_dependencies(project: str, cycle_id: str) -> list[str]:
