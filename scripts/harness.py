@@ -1089,10 +1089,19 @@ def cmd_attempt(project: str, cycle_id: str) -> None:
     if row is None:
         sys.exit(f"no cycle {cycle_id} in {project}")
 
-    # A finished cycle is not being dispatched, so counting an attempt against it is a caller error —
-    # and left unguarded the bound branch below would overwrite `done` with `blocked`. Refuse instead.
-    if row.get("state") == "done":
-        sys.exit(f"cycle {cycle_id} in {project} is already done; nothing to attempt.")
+    # An attempt is only meaningful against a cycle actually being dispatched — `red` (dispatched, in
+    # flight) or `queued` (about to be). Any other state is not being worked, so counting an attempt
+    # against it is a caller error, and left unguarded the bound branch below would overwrite it with
+    # `blocked` — flipping a `green` cycle to blocked, or re-blocking an already-blocked one and
+    # inflating its spent count. A freshly dispatched cycle may carry no state string yet; treat a
+    # missing state as `queued` so the normal first-dispatch path is untouched. Refuse the rest.
+    state_now = row.get("state") or "queued"
+    if state_now not in ("red", "queued"):
+        sys.exit(
+            f"cycle {cycle_id} in {project} is {state_now}, not being dispatched; nothing to attempt.\n"
+            f"  Only a red or queued cycle can be attempted. To resume a blocked cycle, re-queue it "
+            f"(harness.py cycle {project} {cycle_id} queued), which resets its attempt count."
+        )
 
     n = int(row.get("attempts", 0)) + 1
     row["attempts"] = n
