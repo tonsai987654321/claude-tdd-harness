@@ -116,6 +116,26 @@ def test_attempt_refuses_an_already_done_cycle(tmp_path: Path) -> None:
     assert _state_of(tmp_path)["state"] == "done", "the done cycle must not be clobbered to blocked"
 
 
+def test_attempt_refuses_a_green_cycle_without_clobbering_it(tmp_path: Path) -> None:
+    """An attempt is only meaningful against a cycle actually being dispatched (red/queued). A green
+    cycle is not being dispatched, so attempting it must be refused — not silently incremented, and
+    never flipped to blocked at the bound."""
+    _project(tmp_path, attempts=4, cycle_state="green")
+    r = run(tmp_path, HARNESS, "attempt", "api", "0")
+    assert r.returncode != 0, "attempt on a green cycle must be refused"
+    assert _state_of(tmp_path)["state"] == "green", "a green cycle must not be clobbered to blocked"
+    assert _attempts(tmp_path) == 4, "a refused attempt must not increment the count"
+
+
+def test_attempt_refuses_an_already_blocked_cycle(tmp_path: Path) -> None:
+    """Re-attempting an already-blocked cycle must be refused too: the way to resume it is to
+    re-queue it, which resets the count. A bare re-attempt must not increment further."""
+    _project(tmp_path, attempts=5, cycle_state="blocked")
+    r = run(tmp_path, HARNESS, "attempt", "api", "0")
+    assert r.returncode != 0, "attempt on a blocked cycle must be refused"
+    assert _attempts(tmp_path) == 5, "a refused attempt must not increment the count"
+
+
 def test_next_cycle_still_builds_a_cycle_with_rounds_left(tmp_path: Path) -> None:
     """Below the bound, the cycle is still the next thing to build — the breaker only trips at the end."""
     _project(tmp_path, attempts=2, cycle_state="red")
