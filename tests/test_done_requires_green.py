@@ -110,6 +110,30 @@ def test_done_is_allowed_when_the_open_gate_belongs_to_another_cycle(tmp_path: P
     assert r.returncode == 0, f"cycle 0 greened; a later cycle's open gate must not block it:\n{r.stdout}{r.stderr}"
 
 
+def test_an_unattributable_open_gate_is_refused_and_the_message_points_at_the_in_flight_cycle(tmp_path: Path) -> None:
+    """Fail-closed edge: a later cycle holds the gate open but declares no first_test, so the gate
+    names no cycle. Closing the earlier, green cycle is refused (safe direction), and the message must
+    explain the in-flight case rather than wrongly asserting this cycle's own green was skipped."""
+    sha = _write(tmp_path, "OPEN")
+    (tmp_path / ".claude" / "cycles" / "demo-api.json").write_text(
+        json.dumps({"build_order": 1, "runner": "pytest", "cycles": [
+            {"id": 0, "title": "auth", "first_test": "tests/test_auth.py"},
+            {"id": 1, "title": "billing"},  # no first_test — the gate it holds is unattributable
+        ]}),
+        encoding="utf-8")
+    state_p = tmp_path / ".claude" / "state" / "demo-api.json"
+    st = json.loads(state_p.read_text(encoding="utf-8"))
+    st["gate"]["test"] = ["tests/test_billing.py"]  # names no declared first_test
+    st["cycles"] = [{"id": 0, "title": "auth", "state": "green"}, {"id": 1, "title": "billing", "state": "red"}]
+    state_p.write_text(json.dumps(st), encoding="utf-8")
+
+    r = run_harness(tmp_path, "cycle", "demo-api", "0", "done", "--evidence", f"pytest 1 passed; {sha} [RED]")
+
+    assert r.returncode != 0, "an unattributable open gate must fail closed"
+    assert "first_test" in r.stderr or "in-flight" in r.stderr, (
+        f"the refusal must explain the in-flight case, not just blame this cycle:\n{r.stderr}")
+
+
 def test_done_is_allowed_once_green_has_shut_the_gate(tmp_path: Path) -> None:
     """The honest flow: green ran, shut the gate, and the cycle closes on otherwise-valid evidence."""
     sha = _write(tmp_path, "SHUT")

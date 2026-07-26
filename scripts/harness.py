@@ -1173,11 +1173,14 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
     # confirmed". The open gate is this cycle's only when it was opened on this cycle's declared test.
     if new_state == "done" and _gate_open_for_cycle(project, cycle_id):
         sys.exit(
-            f"REFUSED: cycle {cycle_id} cannot be 'done' — its gate is still OPEN.\n"
-            f"  The gate opened on this cycle's test and only a passing `green` shuts it, so an open "
-            f"gate here means green never confirmed the suite.\n"
-            f"  Run `green` — if it passes, the gate shuts and the cycle can close; if it does not, "
-            f"the cycle is not done."
+            f"REFUSED: cycle {cycle_id} cannot be 'done' — a gate is still OPEN for {project}.\n"
+            f"  Only a passing `green` shuts the gate, so an open gate means green has not confirmed "
+            f"the suite.\n"
+            f"  If this cycle's own green was skipped, run `green` — it shuts the gate and the cycle "
+            f"can close.\n"
+            f"  If a different, in-flight cycle is holding the gate open, `green` or close that one "
+            f"first — or give it a first_test in its cycle file so the gate can be attributed. An open "
+            f"gate that names no cycle is refused rather than assumed harmless."
         )
 
     state = load_state(project)
