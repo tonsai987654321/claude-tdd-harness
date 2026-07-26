@@ -60,6 +60,15 @@ def test_a_workflow_that_does_not_invoke_history_still_warns(tmp_path: Path) -> 
     assert ADVISORY in out, f"a workflow that never runs history is not the boundary:\n{out}"
 
 
+def test_a_commented_out_history_line_is_not_the_boundary(tmp_path: Path) -> None:
+    """A disabled workflow enforces nothing. A substring match would read the comment as wired and
+    stay silent on a repo that has no boundary — the exact false reassurance this advisory exists to
+    avoid."""
+    _wire_workflow(tmp_path, "jobs:\n  order:\n    steps:\n      # - run: python3 harness.py history --all --repo .\n")
+    out = version(tmp_path)
+    assert ADVISORY in out, f"a commented-out invocation is not a live boundary:\n{out}"
+
+
 def test_the_advisory_is_not_a_failure(tmp_path: Path) -> None:
     """It must not shut the gate or exit non-zero — a repo may opt out of CI on purpose."""
     proc = subprocess.run(

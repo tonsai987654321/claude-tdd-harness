@@ -44,6 +44,13 @@ honoured across compaction and resumed sessions because it is state, not memory.
 already renders it (`[!]`). Raising `max_attempts` to push past a block is possible and visible in a
 committed config diff — the same "loud, not forbidden" stance as the gate's bypass.
 
+The block is not a one-way trap. Re-queuing the cycle (`cycle <project> <id> queued`) clears the
+attempt budget and makes it dispatchable again, so a cycle blocked while its cause was unfixed
+resumes once the cause is fixed — without hand-editing gitignored state. Reset lives on `queued`
+alone, never on the `red` the orchestrator sets every dispatch, or the count would zero each round
+and the breaker could never trip. `attempt` also refuses a cycle already `done`, so a stray call
+cannot overwrite a finished cycle's state with `blocked`.
+
 ## Limitations
 
 The count measures dispatches, not the quality of each attempt: five shallow tries and five serious
