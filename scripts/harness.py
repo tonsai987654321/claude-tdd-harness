@@ -1761,6 +1761,25 @@ def installed_plugin_version() -> str | None:
     return None
 
 
+def history_in_ci_wired() -> bool:
+    """Does any wired-in workflow actually run the ordering check?
+
+    `.github/workflows/` is the live location — a workflow rendered to `docs/ci/` is inert until a
+    human copies it here, so only this directory counts. The signal is a file that invokes
+    `harness.py history`; the presence of *a* workflow is not the boundary, one that runs it is.
+    """
+    wf = ROOT / ".github" / "workflows"
+    if not wf.is_dir():
+        return False
+    for p in (*wf.glob("*.yml"), *wf.glob("*.yaml")):
+        try:
+            if "harness.py history" in p.read_text(encoding="utf-8"):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def cmd_version() -> None:
     """Report the plugin version this repo's `.claude/` came from, and whether it is behind.
 
@@ -1788,6 +1807,20 @@ def cmd_version() -> None:
             f"   The vendored gate and scripts are whatever {stamped} shipped, so a fix made since "
             f"then is not running here.\n"
             f"   Re-sync with /harness-init, or keep the fork deliberately — but knowing it is one."
+        )
+
+    # The local gate and every check here run where a cooperative agent runs; the CI `history` check
+    # is the only boundary it cannot game. A repo can pass init.sh fully green and enforce nothing,
+    # because the ordering workflow ships to docs/ci/ inert and nothing checks it was ever turned on.
+    # Advisory, never a failure (a repo may opt out of CI on purpose), and `!!` so init.sh surfaces
+    # it even under --quiet.
+    if not history_in_ci_wired():
+        print(
+            "\n!! history-in-CI not detected — this repo has evidence, not a boundary.\n"
+            "   Every check here runs where the agent does; the CI `history` check is the only one "
+            "it cannot game, and no .github/workflows/ file invokes it.\n"
+            "   Copy the ordering workflow into .github/workflows/ to turn the boundary on, or opt "
+            "out deliberately — this is advisory, not a failure."
         )
 
 

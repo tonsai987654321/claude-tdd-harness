@@ -74,7 +74,9 @@ def test_a_matching_stamp_does_not_warn(root: Path, tmp_path: Path) -> None:
     r = run_version(root, CLAUDE_PLUGIN_ROOT=str(fake_plugin(tmp_path, "0.9.0")))
 
     assert r.returncode == 0, r.stderr
-    assert "!!" not in r.stdout, r.stdout
+    # Drift-specific: `version` carries a second, unrelated advisory (history-in-CI), so a blanket
+    # "no !!" would conflate them. This test is about the drift warning staying silent when in sync.
+    assert "came from tdd-harness" not in r.stdout, r.stdout
 
 
 def test_no_installed_plugin_is_silent_about_drift(root: Path, tmp_path: Path) -> None:
@@ -84,7 +86,7 @@ def test_no_installed_plugin_is_silent_about_drift(root: Path, tmp_path: Path) -
     r = run_version(root, CLAUDE_PLUGIN_ROOT="", HOME=str(tmp_path / "empty-home"))
 
     assert r.returncode == 0, r.stderr
-    assert "!!" not in r.stdout, r.stdout
+    assert "came from tdd-harness" not in r.stdout, r.stdout  # drift-specific (see above)
     assert "0.6.0" in r.stdout, "it should still report what this repo carries"
 
 
