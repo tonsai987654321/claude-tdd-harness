@@ -50,6 +50,19 @@ def state_for(project: str) -> dict | None:
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
 
 
+DEFAULT_MAX_ATTEMPTS = 5
+
+
+def max_attempts() -> int:
+    """The fix-round bound, read from the same config `harness.py` reads so the two agree."""
+    try:
+        cfg = json.loads((ROOT / ".claude" / "harness.json").read_text(encoding="utf-8"))
+        v = cfg.get("max_attempts", DEFAULT_MAX_ATTEMPTS)
+        return v if isinstance(v, int) and v >= 2 else DEFAULT_MAX_ATTEMPTS
+    except (OSError, json.JSONDecodeError):
+        return DEFAULT_MAX_ATTEMPTS
+
+
 def action_for(project: str) -> list[str] | None:
     """The lines this project contributes: a single BUILD, one-or-more BLOCKED, or None if done.
 
@@ -83,7 +96,14 @@ def action_for(project: str) -> list[str] | None:
             blocked.append((c, waiting))
             continue
         # The first runnable cycle is this project's whole contribution to the frontier: its own
-        # cycles are ordered, so at most one may start.
+        # cycles are ordered, so at most one may start. Unless it has exhausted its fix-rounds — then
+        # handing it out again is exactly the grind the breaker exists to stop, so it surfaces as
+        # BLOCKED for a human, matching what `harness.py attempt` recorded (the count is durable).
+        if by_id.get(c["id"], {}).get("attempts", 0) >= max_attempts():
+            return [
+                f"BLOCKED {project} {c['id']} {c['title']} — {by_id[c['id']]['attempts']} attempts, "
+                f"none passing; the fix-round breaker tripped"
+            ]
         return [f"BUILD {project} {c['id']} {c['title']}"]
 
     # Every remaining cycle is waiting on another. Reporting nothing would let the caller read a

@@ -60,6 +60,20 @@ git add -A && git commit -m "feat(<cycle>): <behaviour> [GREEN]"
 - **The stack is not yours to choose.** It is the `stack` key in `.claude/harness.json`, rendered into `CLAUDE.md`. Read it before you write an import. If it is still a TODO, stop and say so — building against a stack nobody declared is how a repo ends up with two.
 - **Test doubles are a last resort.** Where the brief calls for integration tests, run them against the real dependency, not a substitute that agrees with you.
 
+## The excuses, answered before you reach for them
+
+Every one of these has been used to ship untested code, and the hook or a later check catches it anyway — after wasting the cycle. Meet the answer here instead. Violating the letter of a rule is violating its spirit; a reworded excuse is still the excuse.
+
+| What you'll tell yourself | What is actually true |
+|---|---|
+| "I'll write the code first, then the test — same result." | It is not the same result. The gate opens only on a failing test, and `green` reverts your code and reruns the test (ADR-0010): a test written after the code, to fit it, passes when reverted and is refused. Write the test first. |
+| "The suite passed, I'll rewrite the test to something simpler and still close it." | `green` reruns the test *that opened the gate* with the code reverted. A test simplified until it no longer needs the code proves nothing and is refused. |
+| "It's obviously going to pass — I'll mark it done and run green after." | `done` refuses while the gate is OPEN. Green confirms the suite; skipping it means the cycle is not done, whatever you intend to do next. |
+| "`ImportError` isn't a *real* failure, I'll assert something first." | An `ImportError` because the module does not exist yet **is** a legitimate RED. That is the normal first failure. Do not manufacture a different one. |
+| "The gate is in my way; `HARNESS_GATE_BYPASS=1` just this once." | Bypass prints to stderr and lands in the transcript. It turns every `[RED] → [GREEN]` in the history into a claim rather than a fact. The way past the gate is a failing test, never the bypass. |
+| "I'm confident it passes — I don't need to run it." | Confidence is not evidence. The evidence line records what *ran and printed*. Run it. |
+| "This flaw in an earlier cycle is quick, I'll just fix it here." | Stay in your cycle. Report it. A fix outside your cycle has no failing test on record and muddies two cycles' history. |
+
 ## Report back
 
 Return to the orchestrator, and nothing else:

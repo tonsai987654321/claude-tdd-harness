@@ -108,6 +108,26 @@ def test_the_external_resume_grants_tools_to_its_headless_run() -> None:
     )
 
 
+def test_the_pressure_surfaces_carry_a_rationalisation_table() -> None:
+    """A rule stated once is a rule an agent under pressure argues past. The implementer and the
+    orchestrator are the two surfaces that ship code, so each answers its own excuses in a table
+    next to the rule — the prose backstop to the hooks (ADR-0003), harder to talk over."""
+    for rel in ("agents/tdd-implementer.md", "commands/harness-build.md"):
+        text = (PLUGIN_ROOT / rel).read_text(encoding="utf-8")
+        assert "answered before you reach for them" in text, f"{rel} lost its rationalisation table"
+        # A table, not a paragraph: the two-column "excuse | reality" shape is the point.
+        assert "What is actually true" in text, f"{rel}'s table lost its reality column"
+
+
+def test_the_debug_command_is_root_cause_first() -> None:
+    """`/debug-mantra` formalises the debugging discipline: root cause before any fix, in phases.
+    Guard the load-bearing parts so it cannot decay back into a vague 'investigate first' note."""
+    text = (PLUGIN_ROOT / "commands" / "debug-mantra.md").read_text(encoding="utf-8")
+    assert "NO FIX BEFORE THE ROOT CAUSE IS PROVEN" in text, "the debug command lost its iron law"
+    for phase in ("Phase 1", "Phase 2", "Phase 3", "Phase 4"):
+        assert phase in text, f"the debug command lost {phase}"
+
+
 def test_every_command_file_declares_a_description() -> None:
     """The description is what the user sees in the command picker. A command with none is a
     command nobody finds."""

@@ -1018,6 +1018,57 @@ def _refuse_unmet_dependencies(project: str, cycle_id: str) -> None:
         )
 
 
+DEFAULT_MAX_ATTEMPTS = 5
+
+
+def max_attempts() -> int:
+    """How many times one cycle may be dispatched before the breaker trips. Configurable so a team
+    can widen or narrow the patience; floored at 2, because a bound of 1 forbids any rework at all."""
+    v = harness_config().get("max_attempts", DEFAULT_MAX_ATTEMPTS)
+    return v if isinstance(v, int) and v >= 2 else DEFAULT_MAX_ATTEMPTS
+
+
+def cmd_attempt(project: str, cycle_id: str) -> None:
+    """Record one dispatch of a cycle and say where it now stands: keep going, escalate, or stop.
+
+    The bound used to live only in the orchestrator's prompt ("two rework rounds, then blocked"),
+    which is a prior, not a constraint — it does not survive a compaction or a resumed session that
+    never read it, so an unattended loop could rework one cycle forever. The count is durable state
+    now, and `next_cycle` reads the same number, so an exhausted cycle stops being handed out.
+    """
+    state = load_state(project)
+    row = next((c for c in state["cycles"] if str(c["id"]) == str(cycle_id)), None)
+    if row is None:
+        sys.exit(f"no cycle {cycle_id} in {project}")
+
+    n = int(row.get("attempts", 0)) + 1
+    row["attempts"] = n
+    m = max_attempts()
+
+    if n >= m:
+        # Mark it blocked so the board and next_cycle agree without a second command, and exit
+        # non-zero so an orchestrating loop cannot read the result as a go-ahead to dispatch again.
+        row["state"] = "blocked"
+        save_state(project, state)
+        sys.exit(
+            f"BLOCKED {project} {cycle_id} — {n} attempts, none passing. The breaker tripped at "
+            f"{m}.\n"
+            f"  Stop dispatching this cycle. It needs a human: the test may be wrong, the brief "
+            f"unclear, or the design fighting the cycle boundary.\n"
+            f"  Raising max_attempts in .claude/harness.json to grind further is rarely the answer."
+        )
+
+    save_state(project, state)
+    if n == m - 1:
+        # The last round before the breaker: give it a stronger attempt rather than the same one.
+        print(
+            f"ESCALATE {project} {cycle_id} — attempt {n}/{m}. Retry with a more capable model; "
+            f"this is the last round before the cycle blocks."
+        )
+        return
+    print(f"ATTEMPT {project} {cycle_id} — {n}/{m}.")
+
+
 def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, evidence: str | None) -> None:
     valid = {"queued", "red", "green", "done", "blocked"}
     if new_state not in valid:
@@ -1045,6 +1096,23 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
 
     if new_state == "done":
         _refuse_unmet_dependencies(project, cycle_id)
+
+    # `done` means green confirmed, not just a test committed. The checks below prove the RED test
+    # exists and was committed; none prove the suite ever passed. `green` is the only thing that
+    # shuts the gate, and only on a passing suite (with the code actually needed — ADR-0010); state
+    # is a protected path, so SHUT cannot be forged. So a gate still OPEN at `done` is mechanical
+    # proof green never confirmed — an agent opened the gate with `red`, wrote the code, and closed
+    # the cycle skipping green. Refuse it. This does not re-run the suite (that would break `done`'s
+    # contract as a state transition and every done that closes a cycle with no runner); a suite
+    # broken after a green without reopening the gate stays the cycle-reviewer's job (ADR-0003).
+    if new_state == "done" and load_state(project).get("gate", {}).get("state") == "OPEN":
+        sys.exit(
+            f"REFUSED: cycle {cycle_id} cannot be 'done' while {project}'s gate is OPEN.\n"
+            f"  The gate is opened by `red` and shut only by a passing `green`, so an open gate "
+            f"means green never confirmed the suite.\n"
+            f"  Run `green` — if it passes, the gate shuts and the cycle can close; if it does not, "
+            f"the cycle is not done."
+        )
 
     state = load_state(project)
 
@@ -1791,6 +1859,11 @@ def main() -> None:
         require_known_project(args[0])
         agent = args[3] if len(args) > 3 else None
         cmd_cycle(args[0], args[1], args[2], agent, evidence)
+    elif cmd == "attempt":
+        if len(args) < 2:
+            sys.exit("usage: harness.py attempt <project> <cycle-id>")
+        require_known_project(args[0])
+        cmd_attempt(args[0], args[1])
     elif cmd == "status":
         write = "--write" in args
         cmd_status([a for a in args if not a.startswith("--")], write)

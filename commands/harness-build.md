@@ -15,14 +15,21 @@ You are the **orchestrator** for `$1`. You do not write project code yourself �
 
 ## The dispatch loop, per cycle
 
-1. Mark it running:
-   `python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" cycle $1 <id> red tdd-implementer`
+1. Mark it running and record the attempt:
+   ```bash
+   python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" cycle $1 <id> red tdd-implementer
+   python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" attempt $1 <id>
+   ```
+   `attempt` keeps a durable count of how many times this cycle has been dispatched, so the bound survives a resumed or compacted session. Read its output:
+   - `ATTEMPT …` — dispatch normally.
+   - `ESCALATE …` — the last round before the breaker. Dispatch `tdd-implementer` **with a more capable model** (e.g. opus), not the same one that just failed.
+   - `BLOCKED …` (non-zero exit) — the breaker tripped; the cycle is already marked `blocked`. Stop dispatching it, report it to the user, and move on. Do not raise `max_attempts` to grind further.
 
 2. Spawn `tdd-implementer` with: project name, cycle id, cycle title, brief path, the `first_test` path, and the coverage gate. Tell it to work in `projects/$1`.
 
 3. When it returns, spawn `cycle-reviewer` on the same cycle.
 
-4. On `REWORK`: hand the findings back to a fresh `tdd-implementer` for the same cycle. Two rework rounds without a PASS means mark the cycle `blocked` and stop — do not grind.
+4. On `REWORK`: hand the findings back to a fresh `tdd-implementer` for the same cycle — looping back to step 1, which records the next attempt. The `attempt` breaker, not a number you carry in your head, decides when to escalate the model and when to stop. Do not grind past a `BLOCKED`.
 
 5. On `PASS`, close the cycle with the reviewer's confirmed evidence line — not the implementer's claim, the reviewer re-ran the gates:
 
@@ -38,6 +45,17 @@ You are the **orchestrator** for `$1`. You do not write project code yourself �
 6. Record anything surprising as a new `docs/lessons/NNNN-*.md`. A lesson is something that would have changed how you dispatched the cycle had you known it. Not a diary. If the surprise can be turned into a check instead, write the check and mark the lesson `mechanised` — see `docs/lessons/0000-how-to-write-one.md`.
 
 7. At the end of the session, or when you stop: `python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/harness.py" handoff`.
+
+## The excuses, answered before you reach for them
+
+You are under pressure to show a green board. These shortcuts all produce one that lies.
+
+| What you'll tell yourself | What is actually true |
+|---|---|
+| "The implementer says it passed — I'll close it on its report." | Close on the *reviewer's* re-run, never the implementer's claim. The implementer is the one under pressure to be done. |
+| "`done` wants evidence — I'll write a plausible line." | `done` resolves the SHAs against git and refuses a gate that is still OPEN. An invented line names commits that do not exist, or a green that never ran. |
+| "Third rework round, it's close enough — just mark it done." | A cycle that cannot pass in the allotted rounds is `blocked`, not `done`. Grinding a red cycle into a green mark is the one thing this whole apparatus exists to prevent. |
+| "I'll skip the blocked cycle and come back." | The cycles are ordered; later tests depend on earlier code. Stop at the block and report it. |
 
 ## Cycle 0 is different
 
