@@ -71,6 +71,8 @@ python3 .claude/scripts/harness.py cycle <project> 1 done \
 
 It **refuses** without one, and `init.sh` fails on any `done` cycle missing it. A completion nobody can check is indistinguishable from a lie. The evidence comes from the reviewer, which re-runs the gates itself — never from the implementer's own report.
 
+It also **refuses while the gate is still OPEN**: the gate is opened by `red` and shut only by a passing `green`, so an open gate at `done` means green never confirmed the suite. Run `green` first — a cycle whose suite has not been shown to pass is not done.
+
 ## When the gate blocks you
 
 ```

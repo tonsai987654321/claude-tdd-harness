@@ -1046,6 +1046,23 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
     if new_state == "done":
         _refuse_unmet_dependencies(project, cycle_id)
 
+    # `done` means green confirmed, not just a test committed. The checks below prove the RED test
+    # exists and was committed; none prove the suite ever passed. `green` is the only thing that
+    # shuts the gate, and only on a passing suite (with the code actually needed — ADR-0010); state
+    # is a protected path, so SHUT cannot be forged. So a gate still OPEN at `done` is mechanical
+    # proof green never confirmed — an agent opened the gate with `red`, wrote the code, and closed
+    # the cycle skipping green. Refuse it. This does not re-run the suite (that would break `done`'s
+    # contract as a state transition and every done that closes a cycle with no runner); a suite
+    # broken after a green without reopening the gate stays the cycle-reviewer's job (ADR-0003).
+    if new_state == "done" and load_state(project).get("gate", {}).get("state") == "OPEN":
+        sys.exit(
+            f"REFUSED: cycle {cycle_id} cannot be 'done' while {project}'s gate is OPEN.\n"
+            f"  The gate is opened by `red` and shut only by a passing `green`, so an open gate "
+            f"means green never confirmed the suite.\n"
+            f"  Run `green` — if it passes, the gate shuts and the cycle can close; if it does not, "
+            f"the cycle is not done."
+        )
+
     state = load_state(project)
 
     # And a `done` under the coverage gate is the same lie with a number on it. `coverage_gate`
