@@ -79,6 +79,43 @@ def test_next_cycle_reports_an_exhausted_cycle_as_blocked(tmp_path: Path) -> Non
     assert "api" in out and "0" in out
 
 
+def _state_of(root: Path, cycle_id: int = 0) -> dict:
+    import json as _json
+    state = _json.loads((root / ".claude" / "state" / "api.json").read_text(encoding="utf-8"))
+    return next(c for c in state["cycles"] if str(c["id"]) == str(cycle_id))
+
+
+def test_requeuing_a_blocked_cycle_clears_the_budget_and_lets_it_build_again(tmp_path: Path) -> None:
+    """The breaker must not be a one-way trap: once the cause is fixed, re-queuing the cycle resets
+    its attempt count and next_cycle hands it out again — no hand-edit of protected state."""
+    _project(tmp_path, attempts=4, cycle_state="red")
+    blocked = run(tmp_path, HARNESS, "attempt", "api", "0")  # -> 5, blocks
+    assert blocked.returncode != 0 and _state_of(tmp_path)["state"] == "blocked"
+    assert run(tmp_path, NEXT_CYCLE).stdout.startswith("BLOCKED")
+
+    reset = run(tmp_path, HARNESS, "cycle", "api", "0", "queued")
+    assert reset.returncode == 0, reset.stderr
+    assert _state_of(tmp_path).get("attempts", 0) == 0, "re-queue must clear the attempt budget"
+    assert run(tmp_path, NEXT_CYCLE).stdout.startswith("BUILD"), "a reset cycle must be dispatchable again"
+
+
+def test_a_plain_dispatch_does_not_reset_the_budget(tmp_path: Path) -> None:
+    """Only `queued` resets. The `red` the orchestrator sets every dispatch must not, or the breaker
+    could never accumulate and would never trip."""
+    _project(tmp_path, attempts=3, cycle_state="red")
+    run(tmp_path, HARNESS, "cycle", "api", "0", "red", "tdd-implementer")
+    assert _state_of(tmp_path).get("attempts", 0) == 3, "a red dispatch must not clear the count"
+
+
+def test_attempt_refuses_an_already_done_cycle(tmp_path: Path) -> None:
+    """Counting an attempt against a finished cycle is a caller error, and unguarded it would
+    overwrite `done` with `blocked` at the bound."""
+    _project(tmp_path, attempts=4, cycle_state="done")
+    r = run(tmp_path, HARNESS, "attempt", "api", "0")
+    assert r.returncode != 0, "attempt on a done cycle must be refused"
+    assert _state_of(tmp_path)["state"] == "done", "the done cycle must not be clobbered to blocked"
+
+
 def test_next_cycle_still_builds_a_cycle_with_rounds_left(tmp_path: Path) -> None:
     """Below the bound, the cycle is still the next thing to build — the breaker only trips at the end."""
     _project(tmp_path, attempts=2, cycle_state="red")

@@ -959,6 +959,29 @@ def _refuse_unresolvable_shas(project: str, cycle_id: str, evidence: str) -> Non
         )
 
 
+def _gate_open_for_cycle(project: str, cycle_id: str) -> bool:
+    """Is the project's gate OPEN *and* was it opened on this cycle's test?
+
+    The gate records the test that opened it (`gate.test`); a cycle declares its own test
+    (`first_test`). The open gate belongs to this cycle only when those name the same test — that is
+    what keeps closing an earlier, already-green cycle from being refused because a later cycle has
+    the gate open. A cycle that declares no test cannot own the gate, so it is never blocked here
+    (its missing-RED case is caught by the committed-test checks below, not this one).
+    """
+    gate = load_state(project).get("gate", {})
+    if gate.get("state") != "OPEN":
+        return False
+    declared = next(
+        (c for c in (project_config(project).get("cycles") or []) if str(c.get("id")) == str(cycle_id)),
+        {},
+    )
+    first_test = declared.get("first_test")
+    if not first_test:
+        return False
+    opened_on = [str(a) for a in (gate.get("test") or []) if not str(a).startswith("-")]
+    return any(first_test == t or t.endswith(first_test) or first_test.endswith(t) for t in opened_on)
+
+
 def declared_dependencies(project: str, cycle_id: str) -> list[str]:
     declared = next(
         (c for c in (project_config(project).get("cycles") or []) if str(c.get("id")) == str(cycle_id)),
@@ -1041,6 +1064,11 @@ def cmd_attempt(project: str, cycle_id: str) -> None:
     if row is None:
         sys.exit(f"no cycle {cycle_id} in {project}")
 
+    # A finished cycle is not being dispatched, so counting an attempt against it is a caller error —
+    # and left unguarded the bound branch below would overwrite `done` with `blocked`. Refuse instead.
+    if row.get("state") == "done":
+        sys.exit(f"cycle {cycle_id} in {project} is already done; nothing to attempt.")
+
     n = int(row.get("attempts", 0)) + 1
     row["attempts"] = n
     m = max_attempts()
@@ -1048,6 +1076,7 @@ def cmd_attempt(project: str, cycle_id: str) -> None:
     if n >= m:
         # Mark it blocked so the board and next_cycle agree without a second command, and exit
         # non-zero so an orchestrating loop cannot read the result as a go-ahead to dispatch again.
+        # `cycle <p> <id> queued` clears the count and re-opens it once the cause is fixed (below).
         row["state"] = "blocked"
         save_state(project, state)
         sys.exit(
@@ -1100,16 +1129,19 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
     # `done` means green confirmed, not just a test committed. The checks below prove the RED test
     # exists and was committed; none prove the suite ever passed. `green` is the only thing that
     # shuts the gate, and only on a passing suite (with the code actually needed — ADR-0010); state
-    # is a protected path, so SHUT cannot be forged. So a gate still OPEN at `done` is mechanical
-    # proof green never confirmed — an agent opened the gate with `red`, wrote the code, and closed
-    # the cycle skipping green. Refuse it. This does not re-run the suite (that would break `done`'s
-    # contract as a state transition and every done that closes a cycle with no runner); a suite
-    # broken after a green without reopening the gate stays the cycle-reviewer's job (ADR-0003).
-    if new_state == "done" and load_state(project).get("gate", {}).get("state") == "OPEN":
+    # is a protected path, so SHUT cannot be forged. So a gate open *for this cycle* at `done` is
+    # mechanical proof green never confirmed — an agent opened the gate with `red`, wrote the code,
+    # and closed the cycle skipping green. Refuse that.
+    #
+    # Scoped to this cycle, not the project: the gate is per-project, so an open gate can belong to a
+    # *later* cycle whose work is in flight while an earlier, genuinely-green cycle is being closed.
+    # Blocking on the bare project state refused that legitimate close with a false "green never
+    # confirmed". The open gate is this cycle's only when it was opened on this cycle's declared test.
+    if new_state == "done" and _gate_open_for_cycle(project, cycle_id):
         sys.exit(
-            f"REFUSED: cycle {cycle_id} cannot be 'done' while {project}'s gate is OPEN.\n"
-            f"  The gate is opened by `red` and shut only by a passing `green`, so an open gate "
-            f"means green never confirmed the suite.\n"
+            f"REFUSED: cycle {cycle_id} cannot be 'done' — its gate is still OPEN.\n"
+            f"  The gate opened on this cycle's test and only a passing `green` shuts it, so an open "
+            f"gate here means green never confirmed the suite.\n"
             f"  Run `green` — if it passes, the gate shuts and the cycle can close; if it does not, "
             f"the cycle is not done."
         )
@@ -1185,6 +1217,13 @@ def cmd_cycle(project: str, cycle_id: str, new_state: str, agent: str | None, ev
     for c in state["cycles"]:
         if str(c["id"]) == str(cycle_id):
             c["state"] = new_state
+            # Re-queuing a cycle is the deliberate "start it over" signal, and the one reset the
+            # fix-round breaker needs: a cycle blocked at the bound (its budget spent) becomes
+            # dispatchable again once its cause is fixed, without a hand-edit of protected state.
+            # Only on `queued`, never on the `red` the orchestrator sets every dispatch — resetting
+            # there would zero the count each round and the breaker could never trip.
+            if new_state == "queued":
+                c["attempts"] = 0
             if agent:
                 c["agent"] = agent
             if evidence:
@@ -1773,8 +1812,13 @@ def history_in_ci_wired() -> bool:
         return False
     for p in (*wf.glob("*.yml"), *wf.glob("*.yaml")):
         try:
-            if "harness.py history" in p.read_text(encoding="utf-8"):
-                return True
+            for line in p.read_text(encoding="utf-8").splitlines():
+                # A commented-out invocation is not the boundary — a repo can carry a disabled
+                # workflow and still enforce nothing. Only a live line counts.
+                if line.lstrip().startswith("#"):
+                    continue
+                if "harness.py history" in line:
+                    return True
         except OSError:
             continue
     return False

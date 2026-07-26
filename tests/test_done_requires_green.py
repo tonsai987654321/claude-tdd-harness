@@ -40,7 +40,8 @@ def _write(root: Path, gate_state: str) -> str:
     """A project with a committed RED test and state whose gate is `gate_state`. Returns the RED SHA."""
     (root / ".claude" / "cycles").mkdir(parents=True)
     (root / ".claude" / "cycles" / "demo-api.json").write_text(
-        json.dumps({"build_order": 1, "runner": "pytest", "cycles": [{"id": 0, "title": "auth"}]}),
+        json.dumps({"build_order": 1, "runner": "pytest",
+                    "cycles": [{"id": 0, "title": "auth", "first_test": "tests/test_auth.py"}]}),
         encoding="utf-8")
 
     d = root / "projects" / "demo-api"
@@ -60,6 +61,8 @@ def _write(root: Path, gate_state: str) -> str:
 
     (root / ".claude" / "state").mkdir(parents=True)
     gate: dict = {"state": gate_state}
+    if gate_state == "OPEN":
+        gate["test"] = ["tests/test_auth.py"]  # opened on THIS cycle's declared test
     if gate_state == "SHUT":
         gate["closed_at"] = 1.0  # green sets this; a real close, not the default
     (root / ".claude" / "state" / "demo-api.json").write_text(
@@ -82,6 +85,29 @@ def test_done_is_refused_while_the_gate_is_open(tmp_path: Path) -> None:
 
     assert r.returncode != 0, "a cycle closed while its gate was still OPEN — green never confirmed"
     assert "green" in r.stderr.lower(), f"the refusal must point at the missing green:\n{r.stderr}"
+
+
+def test_done_is_allowed_when_the_open_gate_belongs_to_another_cycle(tmp_path: Path) -> None:
+    """The gate is per-project. An earlier, genuinely-green cycle must still close while a later
+    cycle holds the gate open — the refusal is scoped to the cycle that opened the gate, not the bare
+    project state (that false 'green never confirmed' was the bug this fixes)."""
+    sha = _write(tmp_path, "OPEN")
+    # Redeclare: two cycles, and the open gate was opened on cycle 1's test, not cycle 0's.
+    (tmp_path / ".claude" / "cycles" / "demo-api.json").write_text(
+        json.dumps({"build_order": 1, "runner": "pytest", "cycles": [
+            {"id": 0, "title": "auth", "first_test": "tests/test_auth.py"},
+            {"id": 1, "title": "billing", "first_test": "tests/test_billing.py"},
+        ]}),
+        encoding="utf-8")
+    state_p = tmp_path / ".claude" / "state" / "demo-api.json"
+    st = json.loads(state_p.read_text(encoding="utf-8"))
+    st["gate"]["test"] = ["tests/test_billing.py"]  # gate is open for cycle 1, not cycle 0
+    st["cycles"] = [{"id": 0, "title": "auth", "state": "green"}, {"id": 1, "title": "billing", "state": "red"}]
+    state_p.write_text(json.dumps(st), encoding="utf-8")
+
+    r = run_harness(tmp_path, "cycle", "demo-api", "0", "done", "--evidence", f"pytest 1 passed; {sha} [RED]")
+
+    assert r.returncode == 0, f"cycle 0 greened; a later cycle's open gate must not block it:\n{r.stdout}{r.stderr}"
 
 
 def test_done_is_allowed_once_green_has_shut_the_gate(tmp_path: Path) -> None:

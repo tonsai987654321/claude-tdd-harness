@@ -23,7 +23,7 @@ You are the **orchestrator** for `$1`. You do not write project code yourself �
    `attempt` keeps a durable count of how many times this cycle has been dispatched, so the bound survives a resumed or compacted session. Read its output:
    - `ATTEMPT …` — dispatch normally.
    - `ESCALATE …` — the last round before the breaker. Dispatch `tdd-implementer` **with a more capable model** (e.g. opus), not the same one that just failed.
-   - `BLOCKED …` (non-zero exit) — the breaker tripped; the cycle is already marked `blocked`. Stop dispatching it, report it to the user, and move on. Do not raise `max_attempts` to grind further.
+   - `BLOCKED …` (non-zero exit) — the breaker tripped; the cycle is already marked `blocked`. Stop dispatching it, report it to the user, and move on. Do not raise `max_attempts` to grind further. Once the cause is fixed (the test corrected, the brief clarified), re-queue it to clear the budget and make it dispatchable again: `harness.py cycle $1 <id> queued`. Do this only on a real fix, not to grind.
 
 2. Spawn `tdd-implementer` with: project name, cycle id, cycle title, brief path, the `first_test` path, and the coverage gate. Tell it to work in `projects/$1`.
 
