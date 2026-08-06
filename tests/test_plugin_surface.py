@@ -166,7 +166,11 @@ def test_nothing_outside_the_manifests_hardcodes_a_version() -> None:
         *(PLUGIN_ROOT / "commands").glob("*.md"),
         *(PLUGIN_ROOT / "agents").glob("*.md"),
     ]:
-        if not path.is_file():
+        # These globs walk the working tree, so they also see whatever the platform leaves lying
+        # around. `.DS_Store` is binary, gitignored and never ships, and decoding it as UTF-8
+        # failed this check on every macOS checkout — a check that fails on a file it does not
+        # care about gets run with `-k` around it, which is the same as not having it.
+        if not path.is_file() or path.name.startswith("."):
             continue
         for found in pinned.findall(path.read_text(encoding="utf-8")):
             if found != version:

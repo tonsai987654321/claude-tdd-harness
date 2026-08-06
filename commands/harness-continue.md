@@ -14,23 +14,26 @@ You are running the build **continuously**. Do not stop between cycles for appro
 
    Disarm it (`autocont.sh off`) whenever you STOP the loop for good — on `DONE`, on a `blocked` cycle, or when the user says stop — and also just before a `ScheduleWakeup` that ends the loop.
 
-0. **Check the usage brake first.** Before starting any cycle, read the live 5-hour usage from the statusline snapshot:
+0. **Check the usage brake first.** Before starting any cycle, ask whether the *next whole cycle* fits in what is left — not whether the current reading is under a line:
 
    > The snapshot is `~/.claude/state/usage.json`, and **the harness does not create it** — the rate-limit figures exist only in the statusline command's stdin, so a statusline that tees them there is a prerequisite the user configures once, outside this plugin. Without it the guard returns exit 2 forever and the loop runs unbraked on the reactive path alone. Say so rather than treating a permanent `unknown` as normal.
 
    ```bash
-   python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/usage_guard.py"    # exit 0 go · 10 brake · 2 unknown
+   python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/usage_guard.py" --cycle-start   # 0 go · 10 brake · 2 unknown
    ```
 
-   - **exit 10 (>= 95%)** — do NOT start a new cycle; you would die mid-cycle. Pause cleanly at this boundary: compute the wake and schedule it, then stop.
+   `--cycle-start` marks this reading as a cycle boundary in the guard's trail. The gap between two boundaries is what a cycle costs, and that measurement is the whole basis of the brake — **pass the flag here and nowhere else**, or the guard learns the price of half a cycle and leaves you short exactly that much.
+
+   - **exit 10 (brake)** — do NOT start a cycle. Either the reading is at the ceiling, or one more cycle at the measured price would cross 100 and you would die mid-cycle. Pause cleanly at this boundary:
 
      ```bash
      python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/usage_guard.py" --eta   # seconds to reset + 5min
      ```
 
-     `ScheduleWakeup` with that `delaySeconds` (runtime clamps to [60, 3600]; if the true wait is longer, schedule 3600 and re-check on wake), `prompt` = `<<autonomous-loop-dynamic>>`, `reason` = "5h usage >= 95%; resuming after reset". Then stop — do not dispatch.
-   - **exit 2 (unknown/stale)** — no fresh snapshot (headless run, or statusline hasn't rendered). Proceed, but rely on the reactive path below if a subagent then dies.
-   - **exit 0 (go)** — under threshold; continue to step 1.
+     - Exit 0 → that number is the wait. Re-arm the flag to cover it (`autocont.sh on $((eta + 600))`) so the statusline does not read FALSE while the loop is merely paused, then `ScheduleWakeup` with `delaySeconds` = that value (runtime clamps to [60, 3600]; if the true wait is longer, schedule 3600 and re-check on wake), `prompt` = `<<autonomous-loop-dynamic>>`, `reason` = the guard's own line. Then stop — do not dispatch.
+     - **Non-zero → the guard has no reset time and is refusing to invent one.** Do not substitute a default. Take the reset from the limit message that killed the run and wait until 5 minutes past it; if there is no such message either, stop the loop and say so.
+   - **exit 2 (unknown)** — there is no usable measurement: either no snapshot at all, or one so old that nothing is refreshing it (a headless `claude -p` run has no statusline, so it never writes one). A merely *stale* reading no longer lands here — it is extrapolated and can brake. Report which of the two the guard said, then proceed on the reactive path below.
+   - **exit 0 (go)** — the next cycle fits; continue to step 1.
 
 1. Ask the harness what is next:
 
@@ -47,7 +50,15 @@ You are running the build **continuously**. Do not stop between cycles for appro
 
 3. Run the cycle exactly as `/harness-build` specifies: mark it `red`, dispatch `tdd-implementer`, then `cycle-reviewer`, close with `--evidence` on PASS, push. Cycle 0 of a project is scaffold — do it in the main thread.
 
-4. After the cycle closes, refresh `harness.py status --write` and `harness.py handoff`, then **loop back to step 1** for the next cycle.
+   **Between the two subagents, check the brake again** — without `--cycle-start`:
+
+   ```bash
+   python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/usage_guard.py"
+   ```
+
+   The moment `tdd-implementer` returns is the first fresh rate-limit reading since the cycle began; the statusline is frozen for the whole of a subagent's run, so this is the only mid-cycle number that exists. On exit 10, do not dispatch the reviewer: leave the cycle `red` (its RED commit stands, and step 2 restarts it cleanly), then pause as in step 0. Half a cycle paused is recoverable; a reviewer killed halfway through is the interrupted state step 2 has to clean up.
+
+4. After the cycle closes, refresh `harness.py status --write` and `harness.py handoff`, then **loop back to step 1** for the next cycle. The guard records the cost of the cycle you just ran on its own, at the next `--cycle-start` — there is nothing to log by hand.
 
 ## When a subagent dies from a usage limit
 
@@ -60,7 +71,7 @@ The failure message names a reset time, e.g. "resets 3am (Asia/Bangkok)". Do not
    python3 "$CLAUDE_PROJECT_DIR/.claude/scripts/usage_guard.py" --eta
    ```
 
-   This reads the reset time from the statusline snapshot. If there is no snapshot (a headless run has none), fall back to the reset time the failure message named, e.g. "resets 3am" → wait until 3:05am local.
+   This reads the reset time from the statusline snapshot. **A headless run has no snapshot, so this will exit non-zero and print nothing** — that is the guard refusing to guess, not a failure to handle. Take the reset from the failure message instead, e.g. "resets 3am" → wait until 3:05am local. Never fall back to a fixed short delay: it wakes into the same closed window, burns another partial cycle, and dies again on a loop.
 3. Schedule the resume with `ScheduleWakeup`:
    - `delaySeconds`: the value above, but the runtime clamps to [60, 3600]. If the true wait exceeds 3600s, schedule 3600 and re-check on wake (hop until the reset has actually passed — verify by dispatching once; if it dies again, the limit is not back yet, so schedule the next reset window).
    - `prompt`: the literal sentinel `<<autonomous-loop-dynamic>>` (this re-enters continuous mode on wake).
